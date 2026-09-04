@@ -259,6 +259,7 @@ func (r *Reader) tryOnce(p []byte, off int64) (n int, status int, err error) {
 	req.Header.Set("Accept-Encoding", "identity") // ranges must not be re-encoded
 
 	t0 := time.Now()
+	slog.Debug("rangeio: range request", "offset", off, "want", len(p))
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return 0, 0, err // network-level: retryable

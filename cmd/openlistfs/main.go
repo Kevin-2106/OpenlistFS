@@ -29,6 +29,7 @@ Usage:
   openlistfs stat <path>        Show metadata for one path
   openlistfs readtest <path>    HTTP Range benchmark against the direct link
                                 [--offset N] [--length N] [--stride N] [--count N]
+  openlistfs mount O:           mount the read-only view at a drive letter (WinFsp)
 
 Configuration (environment or .env, see .env.example):
 
@@ -53,6 +54,8 @@ func main() {
 		err = cmdLs(ctx, os.Args[2:])
 	case "stat":
 		err = cmdStat(ctx, os.Args[2:])
+	case "mount":
+		err = cmdMount(ctx, os.Args[2:])
 	case "readtest":
 		err = cmdReadtest(ctx, os.Args[2:])
 	case "help", "-h", "--help":
@@ -73,6 +76,10 @@ func newClient(ctx context.Context) (*openlist.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return buildClient(ctx, cfg)
+}
+
+func buildClient(ctx context.Context, cfg config) (*openlist.Client, error) {
 	var opts []openlist.Option
 	if cfg.Token != "" {
 		opts = append(opts, openlist.WithToken(cfg.Token))

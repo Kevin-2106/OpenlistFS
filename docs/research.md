@@ -143,6 +143,25 @@ Verified with live Range requests against a 1.19 GB MKV:
 The `sign` query parameter (`…:0` = no expiry) authenticates the URL; no extra headers needed.
 raw_url must be used as-is (already percent-encoded).
 
+### WinFsp read-pattern trace (Phase 2 baseline, 2026-09-05)
+
+Traced with `--debug` while ffmpeg decoded 5 s of a 1080p MKV through the mount:
+
+- **358 HTTP Range requests for ~5 MB of data**; 61 % were exactly 32 KiB
+  (WinFsp cache-manager granularity), the rest odd sizes from the MKV
+  demuxer (index probing, interleaved A/V).
+- Every request pays a full HTTP round trip (~60–150 ms on this link), so
+  playback workloads collapse to **~0.2–0.5 MiB/s** — below the ~1 MiB/s a
+  1080p BluRay stream needs in real time.
+- With 1 MiB reads the same mount sustains **3.66 MiB/s** — identical to the
+  direct-HTTP ceiling. The gofs/WinFsp layers add no measurable throughput
+  overhead; **request latency x request count is the only enemy**.
+- Phase 2 verdict: the naive `ReadAt → one Range` mapping cannot play video
+  smoothly. This is precisely what the Phase 3 read-ahead layer targets
+  (large sequential fetches into RAM, small reads served from the buffer).
+- Mount lifecycle: killing the backing process auto-unmounts the drive
+  (no ghost mounts observed); Ctrl+C path cancels context then Unmounts.
+
 ### Measured baseline (Phase 0 probe, 2026-09-05, from dev machine)
 
 - TTFB per Range request: **0.3–1.5 s** on a fresh connection, **~150 ms**

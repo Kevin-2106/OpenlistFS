@@ -315,17 +315,43 @@ func (c *Client) List(ctx context.Context, p string) ([]Entry, error) {
 
 // Stat returns metadata for one path.
 func (c *Client) Stat(ctx context.Context, p string) (Entry, error) {
+	entry, _, _, err := c.fsGet(ctx, "stat", p)
+	return entry, err
+}
+
+// fsGet calls /api/fs/get once and returns the entry plus the raw direct
+// link fields (empty URL for directories or drivers without a direct link).
+func (c *Client) fsGet(ctx context.Context, op, p string) (Entry, string, map[string]string, error) {
 	// Flat shadow struct: an embedded Entry would hijack the whole
 	// object because Entry implements json.Unmarshaler.
 	var data struct {
 		entryShadow
-		RawURL string `json:"raw_url"`
+		RawURL string          `json:"raw_url"`
+		Header json.RawMessage `json:"header"`
 	}
-	err := c.call(ctx, "stat", "/api/fs/get", map[string]any{"path": p}, &data)
+	if err := c.call(ctx, op, "/api/fs/get", map[string]any{"path": p}, &data); err != nil {
+		return Entry{}, "", nil, err
+	}
+	return data.entryShadow.toEntry(), data.RawURL, decodeHeader(data.Header), nil
+}
+
+// GetWithLink returns the entry and a directly fetchable link in one API
+// call. It is what the filesystem hot path uses. link is nil for
+// directories or drivers that provide no direct link.
+func (c *Client) GetWithLink(ctx context.Context, p string) (Entry, *Link, error) {
+	entry, rawURL, header, err := c.fsGet(ctx, "link", p)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, nil, err
 	}
-	return data.entryShadow.toEntry(), nil
+	if rawURL == "" {
+		return entry, nil, nil
+	}
+	return entry, &Link{
+		URL:        rawURL,
+		Header:     header,
+		Source:     "fs/get",
+		ResolvedAt: time.Now(),
+	}, nil
 }
 
 // ResolveLink returns a directly fetchable URL for one file.
@@ -343,9 +369,15 @@ func (c *Client) ResolveLink(ctx context.Context, p string) (*Link, error) {
 		}
 		c.markFsGetOnly()
 	}
-	return c.resolveViaFsGet(ctx, p)
+	_, link, err := c.GetWithLink(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if link == nil {
+		return nil, &Error{Op: "link", Path: p, Message: "no direct link for path (directory or driver without one)"}
+	}
+	return link, nil
 }
-
 func (c *Client) resolveViaFsLink(ctx context.Context, p string) (*Link, error) {
 	var data struct {
 		URL    string          `json:"url"`
@@ -361,25 +393,6 @@ func (c *Client) resolveViaFsLink(ctx context.Context, p string) (*Link, error) 
 		URL:        data.URL,
 		Header:     decodeHeader(data.Header),
 		Source:     "fs/link",
-		ResolvedAt: time.Now(),
-	}, nil
-}
-
-func (c *Client) resolveViaFsGet(ctx context.Context, p string) (*Link, error) {
-	var data struct {
-		RawURL string          `json:"raw_url"`
-		Header json.RawMessage `json:"header"`
-	}
-	if err := c.call(ctx, "link", "/api/fs/get", map[string]any{"path": p}, &data); err != nil {
-		return nil, err
-	}
-	if data.RawURL == "" {
-		return nil, &Error{Op: "link", Path: p, Message: "no raw_url for path (directory or driver without direct link)"}
-	}
-	return &Link{
-		URL:        data.RawURL,
-		Header:     decodeHeader(data.Header),
-		Source:     "fs/get",
 		ResolvedAt: time.Now(),
 	}, nil
 }
