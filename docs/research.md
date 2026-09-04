@@ -145,8 +145,10 @@ raw_url must be used as-is (already percent-encoded).
 
 ### Measured baseline (Phase 0 probe, 2026-09-05, from dev machine)
 
-- TTFB per Range request: **0.3–1.5 s** (fresh connection; keep-alive similar variance)
-- Throughput, sequential keep-alive 4 MiB requests: **~3.6 MiB/s**
+- TTFB per Range request: **0.3–1.5 s** on a fresh connection, **~150 ms**
+  with keep-alive (measured again by `readtest` in Phase 1) — connection
+  reuse matters a lot on this link.
+- Throughput, sequential keep-alive 4–8 MiB requests: **~3.6–3.8 MiB/s**
 - Throughput, 4 workers × disjoint ranges: **~3.5 MiB/s** (no aggregate gain)
 - Conclusion: the server uplink is the ceiling (~30 Mbps); 1 GiB is fetched in ~5 min.
   The PoC's win condition is therefore **latency behavior** (TTFB, request sizing,

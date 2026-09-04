@@ -46,7 +46,13 @@ redacted in all diagnostics.
 openlistfs probe          # server reachability + auth check
 openlistfs ls /Movies     # list a directory
 openlistfs stat /Movies/A.mkv
+openlistfs readtest /Movies/A.mkv --offset 1GiB --length 8MiB --count 4
 ```
+
+`readtest` resolves the direct link, then issues HTTP Range requests and
+discards the data: one bare probe printing HTTP status / `Content-Range` /
+TTFB, followed by `--count` reads through `rangeio.Reader.ReadAt` — the exact
+code path the WinFsp mount uses. Sizes accept `KiB`/`MiB`/`GiB` suffixes.
 
 Note for Git Bash users: MSYS rewrites leading-slash arguments into Windows
 paths (`/` → `C:/Program Files/Git`). Set `MSYS_NO_PATHCONV=1` or pass paths
@@ -55,7 +61,8 @@ without the leading slash (`openlistfs ls Movies`).
 ## Status
 
 - Phase 0 (done): research, OpenList API client, `probe`/`ls`/`stat`.
-- Phase 1 (next): `readtest` — HTTP Range benchmark against the resolved
-  direct URL.
-- Phase 2 (planned): minimal WinFsp read-only mount (`openlistfs mount O:`).
+- Phase 1 (done): `rangeio` (strict HTTP Range ReaderAt: 206/Content-Range
+  validation, 200-at-offset>0 abort, EOF clamping, expired-link re-resolve,
+  retry with logs) + `readtest` benchmark.
+- Phase 2 (next): minimal WinFsp read-only mount (`openlistfs mount O:`).
 - Phase 3 (planned): RAM cache + seek-aware read-ahead.

@@ -27,6 +27,8 @@ Usage:
   openlistfs probe              Check server reachability and authentication
   openlistfs ls <path>          List a directory
   openlistfs stat <path>        Show metadata for one path
+  openlistfs readtest <path>    HTTP Range benchmark against the direct link
+                                [--offset N] [--length N] [--stride N] [--count N]
 
 Configuration (environment or .env, see .env.example):
 
@@ -51,6 +53,8 @@ func main() {
 		err = cmdLs(ctx, os.Args[2:])
 	case "stat":
 		err = cmdStat(ctx, os.Args[2:])
+	case "readtest":
+		err = cmdReadtest(ctx, os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return
