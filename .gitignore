@@ -1,0 +1,11 @@
+# Secrets — never commit
+.env
+
+# Build artifacts
+*.exe
+dist/
+
+# Go
+*.test
+*.out
+coverage.*
