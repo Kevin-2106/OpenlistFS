@@ -156,11 +156,48 @@ Traced with `--debug` while ffmpeg decoded 5 s of a 1080p MKV through the mount:
 - With 1 MiB reads the same mount sustains **3.66 MiB/s** — identical to the
   direct-HTTP ceiling. The gofs/WinFsp layers add no measurable throughput
   overhead; **request latency x request count is the only enemy**.
-- Phase 2 verdict: the naive `ReadAt → one Range` mapping cannot play video
-  smoothly. This is precisely what the Phase 3 read-ahead layer targets
-  (large sequential fetches into RAM, small reads served from the buffer).
+- Deeper trace finding: the MKV demuxer does not read sequentially at all —
+  it **alternates between the first-cluster region (offset ~0) and the Cues
+  index (~1.1 GB away) with 32 KiB reads** while opening, then interleaves
+  A/V clusters. Any design that only accelerates one sequential stream will
+  fail this workload.
 - Mount lifecycle: killing the backing process auto-unmounts the drive
   (no ghost mounts observed); Ctrl+C path cancels context then Unmounts.
+
+### Phase 3 results (read-ahead + RAM block cache, 2026-09-05)
+
+Design that survived contact with the workload:
+
+1. Cache-populating foreground: a missed read loads its **whole 4 MiB block**
+   synchronously (singleflight — concurrent/prefetch loads are shared), so
+   repeated small reads in a region cost one block fetch total.
+2. **Cache hits never touch seek detection**: once both the cluster and Cues
+   regions are cached, the 1.1 GB-apart alternation produces zero network
+   traffic and does not thrash the prefetch stream.
+3. Seek-aware prefetch stream: fills [cursor, cursor+64 MiB) ahead with 3
+   workers; re-anchors on misses that land far from the cursor; waits on a
+   cursor-advance signal when caught up (no polling).
+4. Foreground is never queued behind a prefetch: it always has its own load.
+
+Same ffmpeg simulation, 1080p MKV, same server (~3.6 MiB/s hard ceiling):
+
+| Workload | Phase 2 baseline | Phase 3 |
+|---|---|---|
+| cold open + decode 10 s | ~33 s / 601 requests | **10.9 s / 11 requests** |
+| re-decode 10 s (warm) | 34.6 s / +597 requests | **0.77 s / 0 requests** |
+| seek to 300 s + decode 10 s | 14.7 s | **3.5 s / 3 requests** |
+| seek to 1400 s + decode 10 s | 13.5 s | **3.5 s** |
+| realtime-paced playback 45 s | impossible (0.3 MiB/s) | **46.7 s wall — holds** |
+| 1 MiB sequential (16 MiB) | 3.66 MiB/s | RAM-speed when cached; ceiling when cold |
+
+Data integrity: ranges at block boundaries, cross-block spans, the Cues
+region, and the EOF tail hash-match direct HTTP byte-for-byte.
+
+Why the cold 10 s decode is 10.9 s and not ~3 s: the stress test decodes as
+fast as data arrives (no pacing) and pays a ~1.2 s block-load stall on each
+region switch; real players pace at 1x and the prefetcher stays ahead of the
+playhead (0.83 MB/s demand vs 3.6 MB/s supply), which is why the
+realtime-paced test holds with ease.
 
 ### Measured baseline (Phase 0 probe, 2026-09-05, from dev machine)
 

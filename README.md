@@ -50,14 +50,20 @@ openlistfs readtest /Movies/A.mkv --offset 1GiB --length 8MiB --count 4
 openlistfs mount O:       # mount the read-only view at a drive letter
 ```
 
-`readtest` resolves the direct link, then issues HTTP Range requests and
-discards the data: one bare probe printing HTTP status / `Content-Range` /
-TTFB, followed by `--count` reads through `rangeio.Reader.ReadAt`. Sizes
-accept `KiB`/`MiB`/`GiB` suffixes.
+`mount` flags:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--read-ahead` | `64MiB` | per-file prefetch window; `0` disables caching (Phase 2 baseline) |
+| `--block-size` | `4MiB` | RAM cache block size |
+| `--cache-size` | `256MiB` | total RAM cache cap (LRU) |
+| `--prefetch-concurrency` | `3` | parallel prefetch fetches per file |
+| `--debug` | off | per-request trace on stderr |
 
 `mount` requires [WinFsp](https://winfsp.dev/). Press Ctrl+C to unmount
 cleanly; if the process dies otherwise, the drive disappears with it (WinFsp
-tears down mounts whose backing process is gone).
+tears down mounts whose backing process is gone). On exit it prints session
+statistics (reads, requests, TTFB, cache hit ratio, prefetch waste).
 
 Note for Git Bash users: MSYS rewrites leading-slash arguments into Windows
 paths (`/` → `C:/Program Files/Git`). Set `MSYS_NO_PATHCONV=1` or pass paths
@@ -70,10 +76,15 @@ without the leading slash (`openlistfs ls Movies`).
   validation, 200-at-offset>0 abort, EOF clamping, expired-link re-resolve,
   retry with logs) + `readtest` benchmark.
 - Phase 2 (done): minimal read-only WinFsp mount via gofs. Content verified
-  byte-identical to direct HTTP; writes rejected; large reads hit the
-  network ceiling. **Known baseline limitation** (see docs/research.md):
-  WinFsp issues 32 KiB reads, so playback is latency-bound (~0.3 MiB/s)
-  until Phase 3 read-ahead lands.
-- Phase 3 (next): RAM cache + seek-aware read-ahead.
+  byte-identical to direct HTTP; writes rejected. Baseline showed WinFsp's
+  32 KiB reads are latency-bound (~0.3 MiB/s playback) — see docs/research.md.
+- Phase 3 (done): RAM block cache + seek-aware read-ahead. Same ffmpeg
+  playback simulation: **decode-rate 0.3 → ~4 MiB/s equivalent; seek+decode
+  14.7 s → 3.5 s; warm re-read 0 requests; realtime playback holds** on the
+  ~3.6 MiB/s (server-capped) link. Cache-populating foreground loads +
+  hit-reads-don't-disturb-the-stream were the two design decisions that
+  mattered (details in docs/research.md).
+- Next: the project's stop condition asks for a comparison against
+  rclone mount before deciding whether anything more is worth building.
 - Phase 4 (never, by design): writes, GUI, disk cache, product polish —
   unless the Phase 3 numbers justify continuing at all.

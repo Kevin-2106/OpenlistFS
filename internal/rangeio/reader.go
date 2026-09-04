@@ -137,9 +137,17 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-// ReadAt fills p starting at off. It satisfies io.ReaderAt: if fewer than
-// len(p) bytes are returned, the error says why (io.EOF at end of file).
+// ReadAt fills p starting at off using the reader's base context. It
+// satisfies io.ReaderAt: if fewer than len(p) bytes are returned, the error
+// says why (io.EOF at end of file).
 func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
+	return r.ReadAtContext(r.ctx, p, off)
+}
+
+// ReadAtContext is ReadAt with an explicit per-call context; callers such
+// as the read-ahead layer use it so prefetches can be cancelled
+// independently of the foreground path.
+func (r *Reader) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -157,7 +165,7 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 
 	filled := 0
 	for filled < len(p) {
-		n, err := r.readRange(p[filled:], off+int64(filled))
+		n, err := r.readRange(ctx, p[filled:], off+int64(filled))
 		filled += n
 		if err != nil {
 			if errors.Is(err, io.EOF) && filled > 0 {
@@ -184,7 +192,7 @@ func expiredStatus(code int) bool {
 		code == http.StatusGone || code == http.StatusUnauthorized
 }
 
-func (r *Reader) readRange(p []byte, off int64) (int, error) {
+func (r *Reader) readRange(ctx context.Context, p []byte, off int64) (int, error) {
 	want := int64(len(p))
 	end := off + want - 1
 	lastErr := error(nil)
@@ -194,7 +202,7 @@ func (r *Reader) readRange(p []byte, off int64) (int, error) {
 			r.Metrics.Retries.Add(1)
 			time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
 		}
-		n, status, err := r.tryOnce(p, off)
+		n, status, err := r.tryOnce(ctx, p, off)
 		if err == nil {
 			return n, nil
 		}
@@ -246,8 +254,8 @@ func (e *contentRangeError) Error() string {
 // kept for symmetry with URL logging in case CDNs embed tokens in headers.
 func redactRangeHeader(h string) string { return h }
 
-func (r *Reader) tryOnce(p []byte, off int64) (n int, status int, err error) {
-	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, r.link.URL, nil)
+func (r *Reader) tryOnce(ctx context.Context, p []byte, off int64) (n int, status int, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.link.URL, nil)
 	if err != nil {
 		return 0, 0, err
 	}

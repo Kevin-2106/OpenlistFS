@@ -11,17 +11,34 @@ import (
 	"openlistfs/internal/vpath"
 )
 
+// Decorator optionally wraps the range reader of an open file — used to
+// attach the read-ahead/cache layer without touching the source stack.
+type Decorator func(path string, size int64, r RangeReader) RangeReader
+
 // FS implements gofs.FileSystem as a strictly read-only view of a Source.
 type FS struct {
-	src Source
-	ctx context.Context // governs all remote operations (cancelled on unmount)
+	src       Source
+	ctx       context.Context // governs all remote operations (cancelled on unmount)
+	decorator Decorator
 }
 
 var _ gofs.FileSystem = (*FS)(nil)
 
+// Option configures the filesystem.
+type Option func(*FS)
+
+// WithDecorator installs a reader decorator (e.g. read-ahead).
+func WithDecorator(d Decorator) Option {
+	return func(f *FS) { f.decorator = d }
+}
+
 // New creates a read-only filesystem over src.
-func New(ctx context.Context, src Source) *FS {
-	return &FS{src: src, ctx: ctx}
+func New(ctx context.Context, src Source, opts ...Option) *FS {
+	f := &FS{src: src, ctx: ctx}
+	for _, opt := range opts {
+		opt(f)
+	}
+	return f
 }
 
 // OpenFile opens a file or directory read-only. Any write/create flag is
@@ -40,6 +57,9 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (gofs.File, error
 			reader.Close()
 		}
 		return newDirHandle(p, entry, f), nil
+	}
+	if f.decorator != nil && reader != nil {
+		reader = f.decorator(p, entry.Size, reader)
 	}
 	return newFileHandle(p, entry, reader), nil
 }
