@@ -84,7 +84,9 @@ without the leading slash (`openlistfs ls Movies`).
   ~3.6 MiB/s (server-capped) link. Cache-populating foreground loads +
   hit-reads-don't-disturb-the-stream were the two design decisions that
   mattered (details in docs/research.md).
-- Next: the project's stop condition asks for a comparison against
-  rclone mount before deciding whether anything more is worth building.
+- Next: the project's stop condition has been evaluated — see
+  [docs/benchmark.md](docs/benchmark.md): seek parity with direct HTTP,
+  ~2.2× faster than default rclone mount, realtime playback holds. Scope
+  expansion is a user decision from here.
 - Phase 4 (never, by design): writes, GUI, disk cache, product polish —
   unless the Phase 3 numbers justify continuing at all.
