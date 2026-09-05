@@ -70,7 +70,7 @@ func TestServesContentWithCache(t *testing.T) {
 	inner := &fakeInner{data: data}
 	cache := NewCache(1 << 20)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize: 1024, Window: 64 * 1024, Concurrency: 2,
+		ChunkSize: 1024, Window: 64 * 1024, Concurrency: 2,
 	})
 	defer r.Close()
 
@@ -107,7 +107,7 @@ func TestTwoHotRegionsKeepStreams(t *testing.T) {
 	inner := &fakeInner{data: data, honorsCtx: true}
 	cache := NewCache(1 << 20)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize: 1024, Window: 64 * 1024, Concurrency: 1,
+		ChunkSize: 1024, Window: 64 * 1024, Concurrency: 1,
 	})
 	defer r.Close()
 
@@ -141,7 +141,7 @@ func TestEOFAcrossEnd(t *testing.T) {
 	inner := &fakeInner{data: data}
 	cache := NewCache(1 << 20)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize: 1024, Window: 4096, Concurrency: 1,
+		ChunkSize: 1024, Window: 4096, Concurrency: 1,
 	})
 	defer r.Close()
 
@@ -164,7 +164,7 @@ func TestLRUEvictionUnderCap(t *testing.T) {
 	// Cap fits ~2 blocks of 1024B… well below the prefetch window.
 	cache := NewCache(3 * 1024)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize: 1024, Window: 128 * 1024, Concurrency: 1,
+		ChunkSize: 1024, Window: 128 * 1024, Concurrency: 1,
 	})
 	defer r.Close()
 
@@ -184,7 +184,7 @@ func TestPrefetchWasteAccounted(t *testing.T) {
 	// Tiny cache: prefetched blocks get evicted before being read.
 	cache := NewCache(1024)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize: 1024, Window: 128 * 1024, Concurrency: 1,
+		ChunkSize: 1024, Window: 128 * 1024, Concurrency: 1,
 	})
 	defer r.Close()
 

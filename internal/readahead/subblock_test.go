@@ -13,10 +13,9 @@ func TestFirstTouchUsesSubBlock(t *testing.T) {
 	inner := &fakeInner{data: data}
 	cache := NewCache(64 << 20)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize:    256 * 1024,
-		SubBlockSize: 32 * 1024,
-		Window:       512 * 1024,
-		Concurrency:  2,
+		ChunkSize:   32 * 1024,
+		Window:      512 * 1024,
+		Concurrency: 2,
 	})
 	defer r.Close()
 

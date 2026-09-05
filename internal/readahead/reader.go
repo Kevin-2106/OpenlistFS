@@ -18,24 +18,43 @@ type Inner interface {
 
 // Config holds the tunables; defaults come from NewReader.
 type Config struct {
-	BlockSize    int64 // bytes per cached block (prefetch granularity)
-	SubBlockSize int64 // foreground-miss granularity; 0 disables sub-blocks
-	Window       int64 // read-ahead distance beyond the stream cursor
-	Concurrency  int   // parallel block fetches within one stream
+	// ChunkSize is the fetch and cache granularity for everything:
+	// foreground misses and prefetch streams load the same chunks, so
+	// concurrent work is deduplicated by the cache's singleflight.
+	// 0 means the 512 KiB default.
+	ChunkSize int64
+	// Window is the read-ahead distance beyond the stream cursor.
+	Window int64
+	// Concurrency is the number of parallel chunk fetches per stream.
+	Concurrency int
 }
 
-// Reader decorates one open file with a seek-aware prefetch stream over a
+// Reader decorates one open file with seek-aware prefetch streams over a
 // shared Cache.
 //
 // Serving rules:
-//   - A read fully covered by loaded blocks never touches the network and
-//     never disturbs the prefetch stream (this is what makes alternating
-//     access patterns — MKV clusters ↔ Cues — cheap after first touch).
-//   - A miss loads the *whole containing block* synchronously (shared with
-//     any in-flight prefetch of the same block) and re-anchors the stream
-//     if the miss landed far from it. The foreground is served by its own
-//     load, never queued behind a prefetch.
-//
+//   - Foreground misses and the prefetch streams fetch the SAME chunk
+//     granularity through the same cache, so overlapping work is shared,
+//     never duplicated.
+//   - A read fully covered by loaded chunks never touches the network and
+//     never disturbs the streams (MKV clusters ↔ Cues alternation is free
+//     after first touch).
+//   - The foreground is served by its own chunk load, never queued behind
+//     a prefetch it did not join.
+type Reader struct {
+	inner Inner
+	cache *Cache
+	file  string
+	size  int64
+	chunk int64 // fetch/cache granularity
+	cfg   Config
+	base  context.Context
+
+	mu         sync.Mutex
+	streams    [2]*stream // ring; nil slots are free
+	background bool
+}
+
 // stream is one prefetch front. Real files routinely have two hot regions
 // (MKV: clusters at the read position, Cues near the end), so the Reader
 // keeps up to two streams alive instead of cancelling on every alternation.
@@ -46,27 +65,12 @@ type stream struct {
 	notify chan struct{}
 }
 
-type Reader struct {
-	inner Inner
-	cache *Cache
-	file  string
-	size  int64
-	sub   int64 // sub-block size (0 = disabled)
-	cfg   Config
-	base  context.Context
-
-	mu      sync.Mutex
-	streams [2]*stream // ring; nil slots are free
-	next    int        // next slot to replace
-	started bool
-}
-
 // NewReader decorates inner. base governs the Reader's lifetime (mount
 // context); individual prefetch streams derive from it and are cancelled on
 // seek.
 func NewReader(base context.Context, file string, size int64, inner Inner, cache *Cache, cfg Config) *Reader {
-	if cfg.BlockSize <= 0 {
-		cfg.BlockSize = 4 << 20
+	if cfg.ChunkSize <= 0 {
+		cfg.ChunkSize = 512 << 10
 	}
 	if cfg.Window <= 0 {
 		cfg.Window = 64 << 20
@@ -74,23 +78,24 @@ func NewReader(base context.Context, file string, size int64, inner Inner, cache
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 3
 	}
-	sub := cfg.SubBlockSize
-	if sub >= cfg.BlockSize {
-		sub = 0 // sub-blocks pointless at or above block granularity
-	}
 	return &Reader{
 		inner: inner,
 		cache: cache,
 		file:  file,
 		size:  size,
-		sub:   sub,
+		chunk: cfg.ChunkSize,
 		cfg:   cfg,
 		base:  base,
 	}
 }
 
-// ReadAt serves p from loaded blocks; anything missing is served by a
-// synchronous whole-block load (cached for later).
+// SetBackground marks this reader as a cache warmer: it fills exactly the
+// chunks it reads — no prefetch streams, no foreground-activity marking —
+// so warming can never flood the connection the way a real player would.
+func (r *Reader) SetBackground() { r.background = true }
+
+// ReadAt serves p from cached chunks; anything missing is fetched
+// synchronously at chunk granularity.
 func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -105,46 +110,36 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 	filled := 0
 	for filled < len(p) {
 		pos := off + int64(filled)
+		ci := pos / r.chunk
 
-		// L1: sub-blocks. First touches (shell thumbnails, index probes)
-		// pay sub-block granularity instead of a whole block; the prefetch
-		// stream keeps filling full blocks underneath.
-		if r.sub > 0 {
-			si := pos / r.sub
-			if data, ok := r.cache.Get(r.subKey(), si); ok && int64(len(data)) > pos-si*r.sub {
-				filled += copy(p[filled:], data[pos-si*r.sub:])
-				continue
-			}
-		}
-
-		// L2: full blocks from the prefetch stream.
-		bi := pos / r.cfg.BlockSize
-		if data, ok := r.cache.Get(r.file, bi); ok && int64(len(data)) > pos-bi*r.cfg.BlockSize {
-			filled += copy(p[filled:], data[pos-bi*r.cfg.BlockSize:])
+		if data, ok := r.cache.Get(r.file, ci); ok && int64(len(data)) > pos-ci*r.chunk {
+			filled += copy(p[filled:], data[pos-ci*r.chunk:])
 			continue
 		}
 
-		// Miss: load the containing sub-block synchronously and re-anchor
-		// the prefetch stream at this position.
-		slog.Debug("readahead: miss", "file", r.file, "off", pos, "block", bi)
-		r.noteMiss(pos)
-		loader, key := r.subLoader(pos), r.subKey()
-		if r.sub <= 0 {
-			loader, key = func() ([]byte, error) { return r.loadBlock(r.base, bi) }, r.file
+		// Miss: load the containing chunk synchronously and feed the
+		// prefetch streams.
+		if !r.background {
+			r.cache.NoteForeground()
 		}
-		data, err := r.cache.Load(key, pos/r.granularity(), false, loader)
+		slog.Debug("readahead: miss", "file", r.file, "off", pos, "chunk", ci)
+		r.noteMiss(pos)
+		data, err := r.cache.Load(r.file, ci, false, func() ([]byte, error) {
+			return r.loadChunk(r.base, ci)
+		})
 		if errors.Is(err, context.Canceled) {
 			// A cancelled prefetch stream owned the load we joined; retry
 			// once under the mount context.
-			data, err = r.cache.Load(key, pos/r.granularity(), false, loader)
+			data, err = r.cache.Load(r.file, ci, false, func() ([]byte, error) {
+				return r.loadChunk(r.base, ci)
+			})
 		}
 		if err != nil {
 			return filled, err
 		}
-		g := r.granularity()
-		n := copy(p[filled:], data[pos-(pos/g)*g:])
+		n := copy(p[filled:], data[pos-ci*r.chunk:])
 		if n == 0 {
-			break // block empty: at EOF
+			break // chunk empty: at EOF
 		}
 		r.cache.Metrics.MissBytes.Add(int64(n))
 		filled += n
@@ -156,37 +151,13 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 	return filled, nil
 }
 
-// granularity returns the unit the foreground loads for pos: the
-// sub-block size when enabled, the block size otherwise.
-func (r *Reader) granularity() int64 {
-	if r.sub > 0 {
-		return r.sub
-	}
-	return r.cfg.BlockSize
-}
-
-func (r *Reader) subKey() string { return r.file + "\x00sub" }
-
-// subLoader loads the sub-block containing pos.
-func (r *Reader) subLoader(pos int64) func() ([]byte, error) {
-	return func() ([]byte, error) {
-		start := (pos / r.sub) * r.sub
-		end := start + r.sub
-		if end > r.size {
-			end = r.size
-		}
-		buf := make([]byte, end-start)
-		if _, err := r.inner.ReadAtContext(r.base, buf, start); err != nil {
-			return nil, err
-		}
-		return buf, nil
-	}
-}
-
 // noteMiss feeds the miss position to the prefetch streams. A miss within
 // a stream's reach nudges that stream's cursor; a far miss anchors a new
 // stream, replacing the oldest one once both slots are taken.
 func (r *Reader) noteMiss(off int64) {
+	if r.background {
+		return // warmers fill only what they read
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -194,7 +165,7 @@ func (r *Reader) noteMiss(off int64) {
 		if s == nil {
 			continue
 		}
-		if off >= s.anchor-r.cfg.BlockSize && off <= s.cursor+r.cfg.BlockSize {
+		if off >= s.anchor-r.chunk && off <= s.cursor+r.chunk {
 			if off > s.cursor {
 				s.cursor = off
 				select {
@@ -237,7 +208,6 @@ func (r *Reader) noteMiss(off int64) {
 		notify: make(chan struct{}, 1),
 	}
 	r.streams[slot] = s
-	r.started = true
 	go r.runPrefetch(streamCtx, s)
 }
 
@@ -249,12 +219,12 @@ func abs64(v int64) int64 {
 }
 
 // runPrefetch keeps the window [cursor, cursor+Window) filled for the life
-// of the stream: blocks are fetched in order, at most Concurrency at a
+// of the stream: chunks are fetched in order, at most Concurrency at a
 // time; when caught up it waits for the cursor to advance. It only exits
 // on cancellation (seek / close) or end of file.
 func (r *Reader) runPrefetch(ctx context.Context, s *stream) {
 	sem := make(chan struct{}, r.cfg.Concurrency)
-	bi := s.cursor / r.cfg.BlockSize
+	ci := s.cursor / r.chunk
 	for {
 		if ctx.Err() != nil {
 			return
@@ -265,8 +235,8 @@ func (r *Reader) runPrefetch(ctx context.Context, s *stream) {
 		if windowEnd > r.size {
 			windowEnd = r.size
 		}
-		blockStart := bi * r.cfg.BlockSize
-		if blockStart >= windowEnd {
+		chunkStart := ci * r.chunk
+		if chunkStart >= windowEnd {
 			if windowEnd >= r.size {
 				return // whole file ahead is covered
 			}
@@ -278,30 +248,30 @@ func (r *Reader) runPrefetch(ctx context.Context, s *stream) {
 			}
 			continue
 		}
-		if !r.cache.Has(r.file, bi) {
+		if !r.cache.Has(r.file, ci) {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
 				return
 			}
-			go func(bi int64) {
+			go func(ci int64) {
 				defer func() { <-sem }()
-				_, err := r.cache.Load(r.file, bi, true, func() ([]byte, error) {
-					return r.loadBlock(ctx, bi)
+				_, err := r.cache.Load(r.file, ci, true, func() ([]byte, error) {
+					return r.loadChunk(ctx, ci)
 				})
 				if err != nil && ctx.Err() == nil {
-					slog.Debug("readahead: prefetch block failed", "file", r.file,
-						"block", bi, "err", err)
+					slog.Debug("readahead: prefetch chunk failed", "file", r.file,
+						"chunk", ci, "err", err)
 				}
-			}(bi)
+			}(ci)
 		}
-		bi++
+		ci++
 	}
 }
 
-func (r *Reader) loadBlock(ctx context.Context, bi int64) ([]byte, error) {
-	start := bi * r.cfg.BlockSize
-	end := start + r.cfg.BlockSize
+func (r *Reader) loadChunk(ctx context.Context, ci int64) ([]byte, error) {
+	start := ci * r.chunk
+	end := start + r.chunk
 	if start >= r.size {
 		return nil, io.EOF
 	}

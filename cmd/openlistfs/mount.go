@@ -37,8 +37,7 @@ func cmdMount(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("mount", flag.ExitOnError)
 	debug := fs.Bool("debug", false, "verbose per-request trace")
 	window := fs.String("read-ahead", "64MiB", "read-ahead window per open file (0 disables caching)")
-	blockSize := fs.String("block-size", "4MiB", "cache block size (prefetch granularity)")
-	subBlockSize := fs.String("sub-block-size", "512KiB", "foreground-miss granularity (0 = whole blocks)")
+	chunkSize := fs.String("chunk-size", "512KiB", "fetch/cache chunk granularity")
 	cacheSize := fs.String("cache-size", "256MiB", "total RAM cache cap")
 	concurrency := fs.Int("prefetch-concurrency", 3, "parallel prefetch fetches per file")
 	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
@@ -55,13 +54,9 @@ func cmdMount(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("--read-ahead: %v", err)
 	}
-	subBytes, err := parseSize(*subBlockSize)
+	chunkBytes, err := parseSize(*chunkSize)
 	if err != nil {
-		return fmt.Errorf("--sub-block-size: %v", err)
-	}
-	blockBytes, err := parseSize(*blockSize)
-	if err != nil {
-		return fmt.Errorf("--block-size: %v", err)
+		return fmt.Errorf("--chunk-size: %v", err)
 	}
 	cacheBytes, err := parseSize(*cacheSize)
 	if err != nil {
@@ -103,10 +98,9 @@ func cmdMount(ctx context.Context, args []string) error {
 		}
 		slog.Debug("readahead: wrapping reader", "path", p, "size", size)
 		return readahead.NewReader(mctx, p, size, inner, cache, readahead.Config{
-			BlockSize:    blockBytes,
-			SubBlockSize: subBytes,
-			Window:       windowBytes,
-			Concurrency:  *concurrency,
+			ChunkSize:   chunkBytes,
+			Window:      windowBytes,
+			Concurrency: *concurrency,
 		})
 	}
 
@@ -129,13 +123,25 @@ func cmdMount(ctx context.Context, args []string) error {
 			}
 			go func(e filesystem.Entry) {
 				defer func() { <-warmSem }()
+				// Yield to the player: while a foreground miss happened
+				// recently, warmers wait.
+				for cache.ForegroundBusy(4 * time.Second) {
+					select {
+					case <-mctx.Done():
+						return
+					case <-time.After(500 * time.Millisecond):
+					}
+				}
 				full := vpath.Join(dir, e.Name)
 				_, reader, err := src.Open(mctx, full)
 				if err != nil || reader == nil {
 					return
 				}
 				wrapped := decorate(full, e.Size, reader)
-				tail := int64(512 << 10)
+				if bg, ok := wrapped.(interface{ SetBackground() }); ok {
+					bg.SetBackground()
+				}
+				tail := chunkBytes
 				if e.Size < tail {
 					tail = e.Size
 				}
@@ -169,8 +175,8 @@ func cmdMount(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("mount %s: %w (is WinFsp installed and the drive letter free?)", mountpoint, err)
 	}
-	mode := fmt.Sprintf("read-ahead %s (blocks %s, cache %s, x%d, network-mode %v)",
-		fmtBytes(windowBytes), fmtBytes(blockBytes), fmtBytes(cacheBytes), *concurrency, *network)
+	mode := fmt.Sprintf("read-ahead %s (chunks %s, cache %s, x%d, network-mode %v)",
+		fmtBytes(windowBytes), fmtBytes(chunkBytes), fmtBytes(cacheBytes), *concurrency, *network)
 	if cache == nil {
 		mode = "disabled (baseline)"
 	}

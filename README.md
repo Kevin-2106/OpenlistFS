@@ -55,8 +55,7 @@ openlistfs mount O:       # mount the read-only view at a drive letter
 | Flag | Default | Meaning |
 |---|---|---|
 | `--read-ahead` | `64MiB` | per-file prefetch window; `0` disables caching (Phase 2 baseline) |
-| `--block-size` | `4MiB` | RAM cache block size (prefetch granularity) |
-| `--sub-block-size` | `512KiB` | foreground first-touch granularity |
+| `--chunk-size` | `512KiB` | fetch/cache chunk granularity (foreground and prefetch share it, so work is never duplicated) |
 | `--cache-size` | `256MiB` | total RAM cache cap (LRU) |
 | `--prefetch-concurrency` | `3` | parallel prefetch fetches per file |
 | `--metadata-ttl` | `2m` | directory listing / stat / direct-link cache lifetime |
