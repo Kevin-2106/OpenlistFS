@@ -193,6 +193,37 @@ Same ffmpeg simulation, 1080p MKV, same server (~3.6 MiB/s hard ceiling):
 Data integrity: ranges at block boundaries, cross-block spans, the Cues
 region, and the EOF tail hash-match direct HTTP byte-for-byte.
 
+### Browsing / metadata phase (post-Phase-3 fix, 2026-09-05)
+
+First real-world use exposed what the benchmarks missed: **all user-visible
+slowness was in metadata, not content** (a session of actual browsing showed
+zero ReadAt calls). Causes, all fixed:
+
+- Every directory open cost 2 sequential API calls (fs/get + fs/list) and
+  every file open 2 more (Stat + GetWithLink) — with no caching, on a link
+  with ~0.3–1.5 s RTT and frequent connection resets.
+- Fix: TTL metadata cache in the source layer (listings, stat, direct links;
+  `--metadata-ttl`, default 30 s; expired links stay safe because the range
+  reader re-resolves on 403/410).
+- Fix: transport-level retry (3 attempts, backoff) + 502/503/504 retry in
+  the API client, plus per-call timing logs — the 8.7 s invisible stall in
+  the open() timeline is now measurable.
+- Fix: TLS-handshake / response-header timeouts on both HTTP transports to
+  bound pathological hangs.
+
+Measured before → after (same mount, same server):
+
+| Operation | before | after |
+|---|---|---|
+| listdir (cold) | 1100–1400 ms | 110–250 ms |
+| listdir (repeat) | 1100–1400 ms | ~1 ms |
+| stat file | 2000 ms | 400–700 ms |
+| open + first read | **14 000–19 500 ms** | **400–630 ms** |
+
+Server phase caveat: seek/playback absolute numbers fluctuate with the
+server's condition (direct-URL controls move identically); the mount tracks
+direct-URL parity in every phase we measured.
+
 Why the cold 10 s decode is 10.9 s and not ~3 s: the stress test decodes as
 fast as data arrives (no pacing) and pays a ~1.2 s block-load stall on each
 region switch; real players pace at 1x and the prefetcher stays ahead of the

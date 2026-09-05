@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -83,9 +84,12 @@ func New(baseURL string, opts ...Option) *Client {
 		HTTP: &http.Client{
 			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:        16,
-				MaxIdleConnsPerHost: 16,
-				IdleConnTimeout:     90 * time.Second,
+				MaxIdleConns:          16,
+				MaxIdleConnsPerHost:   16,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 20 * time.Second,
+				ExpectContinueTimeout: time.Second,
 			},
 		},
 	}
@@ -112,13 +116,24 @@ type envelope struct {
 }
 
 // call performs one API request. When out is non-nil the "data" field is
-// decoded into it.
+// decoded into it. Transport failures and 502/503/504 are retried — this
+// server's connection resets frequently enough that a single attempt makes
+// browsing unreliable.
 func (c *Client) call(ctx context.Context, op, apiPath string, reqBody, out any) error {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("openlist: %s: %w", op, err)
 	}
-	for attempt := 0; ; attempt++ {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			slog.Debug("openlist: retrying api call", "op", op, "attempt", attempt, "err", lastErr)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("openlist: %s: %w", op, ctx.Err())
+			case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
+			}
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+apiPath, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("openlist: %s: %w", op, err)
@@ -127,14 +142,24 @@ func (c *Client) call(ctx context.Context, op, apiPath string, reqBody, out any)
 		if tok := c.currentToken(); tok != "" {
 			req.Header.Set("Authorization", tok)
 		}
+		t0 := time.Now()
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
-			return fmt.Errorf("openlist: %s: %w", op, err)
+			lastErr = fmt.Errorf("openlist: %s: %w", op, err)
+			continue // transport-level: worth another attempt
 		}
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 		resp.Body.Close()
+		dur := time.Since(t0)
 		if err != nil {
-			return fmt.Errorf("openlist: %s: reading response: %w", op, err)
+			lastErr = fmt.Errorf("openlist: %s: reading response: %w", op, err)
+			continue
+		}
+		slog.Debug("openlist: api call", "op", op, "status", resp.StatusCode, "dur", dur.Round(time.Millisecond))
+		if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable ||
+			resp.StatusCode == http.StatusGatewayTimeout {
+			lastErr = fmt.Errorf("openlist: %s: HTTP %d", op, resp.StatusCode)
+			continue
 		}
 		var env envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
@@ -153,11 +178,13 @@ func (c *Client) call(ctx context.Context, op, apiPath string, reqBody, out any)
 		if errors.Is(apiErr, ErrAuth) && attempt == 0 && c.canReLogin() {
 			// Token likely expired: re-login once and retry the call.
 			if lerr := c.Login(ctx); lerr == nil {
+				attempt--
 				continue
 			}
 		}
 		return apiErr
 	}
+	return lastErr
 }
 
 func (c *Client) currentToken() string {

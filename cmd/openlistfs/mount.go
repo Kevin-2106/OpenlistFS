@@ -39,6 +39,7 @@ func cmdMount(ctx context.Context, args []string) error {
 	blockSize := fs.String("block-size", "4MiB", "cache block size")
 	cacheSize := fs.String("cache-size", "256MiB", "total RAM cache cap")
 	concurrency := fs.Int("prefetch-concurrency", 3, "parallel prefetch fetches per file")
+	metaTTL := fs.Duration("metadata-ttl", 30*time.Second, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -78,7 +79,7 @@ func cmdMount(ctx context.Context, args []string) error {
 		return err
 	}
 	metrics := &rangeio.Metrics{}
-	src := c.Source(openlist.WithSourceMetrics(metrics))
+	src := c.Source(openlist.WithSourceMetrics(metrics), openlist.WithMetadataTTL(*metaTTL))
 
 	var cache *readahead.Cache
 	if windowBytes > 0 {

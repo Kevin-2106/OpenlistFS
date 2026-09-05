@@ -124,9 +124,12 @@ func New(ctx context.Context, link Link, opts ...Option) *Reader {
 func defaultClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
-			MaxIdleConns:        16,
-			MaxIdleConnsPerHost: 16,
-			IdleConnTimeout:     90 * time.Second,
+			MaxIdleConns:          16,
+			MaxIdleConnsPerHost:   16,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: time.Second,
 		},
 	}
 }

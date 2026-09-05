@@ -58,6 +58,7 @@ openlistfs mount O:       # mount the read-only view at a drive letter
 | `--block-size` | `4MiB` | RAM cache block size |
 | `--cache-size` | `256MiB` | total RAM cache cap (LRU) |
 | `--prefetch-concurrency` | `3` | parallel prefetch fetches per file |
+| `--metadata-ttl` | `30s` | directory listing / stat / direct-link cache lifetime |
 | `--debug` | off | per-request trace on stderr |
 
 `mount` requires [WinFsp](https://winfsp.dev/). Press Ctrl+C to unmount
