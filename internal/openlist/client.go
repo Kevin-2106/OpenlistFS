@@ -84,11 +84,12 @@ func New(baseURL string, opts ...Option) *Client {
 		HTTP: &http.Client{
 			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
+				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          16,
 				MaxIdleConnsPerHost:   16,
 				IdleConnTimeout:       90 * time.Second,
 				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 20 * time.Second,
+				ResponseHeaderTimeout: 10 * time.Second,
 				ExpectContinueTimeout: time.Second,
 			},
 		},

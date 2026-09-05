@@ -35,13 +35,19 @@ func WithMetadataTTL(ttl time.Duration) SourceOption {
 	return func(cfg *sourceConfig) { cfg.metaTTL = ttl }
 }
 
-// cachedFile is a memoized fs/get result.
+// cachedFile is a memoized fs/get result. notFound entries memoize
+// misses too: the shell probes desktop.ini / Thumbs.db / album art
+// constantly and each uncached miss would be a full API round trip.
 type cachedFile struct {
-	entry Entry
-	url   string
-	head  map[string]string
-	at    time.Time
+	entry    Entry
+	url      string
+	head     map[string]string
+	at       time.Time
+	notFound bool
 }
+
+// negativeTTL bounds how long a not-found answer is served from cache.
+const negativeTTL = 30 * time.Second
 
 // cachedDir is a memoized fs/list result.
 type cachedDir struct {
@@ -63,7 +69,7 @@ type source struct {
 
 // Source adapts the client to filesystem.Source.
 func (c *Client) Source(opts ...SourceOption) filesystem.Source {
-	cfg := sourceConfig{metaTTL: 30 * time.Second}
+	cfg := sourceConfig{metaTTL: 2 * time.Minute}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -96,14 +102,25 @@ func (s *source) List(ctx context.Context, dir string) ([]filesystem.Entry, erro
 func (s *source) Stat(ctx context.Context, p string) (filesystem.Entry, error) {
 	cf, ok := s.cachedFile(p)
 	if ok {
+		if cf.notFound {
+			return filesystem.Entry{}, errNotFound(p)
+		}
 		return toFSEntry(cf.entry), nil
 	}
 	entry, rawURL, header, err := s.client.fsGet(ctx, "stat", p)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			s.rememberNotFound(p)
+			return filesystem.Entry{}, errNotFound(p)
+		}
 		return filesystem.Entry{}, convertErr(err)
 	}
 	s.remember(p, entry, rawURL, header)
 	return toFSEntry(entry), nil
+}
+
+func errNotFound(p string) error {
+	return fmt.Errorf("openlist: stat %s: %w", p, os.ErrNotExist)
 }
 
 // Open resolves entry + direct link (one fs/get when cold) and returns a
@@ -113,9 +130,16 @@ func (s *source) Open(ctx context.Context, p string) (filesystem.Entry, filesyst
 	if !ok {
 		entry, rawURL, header, err := s.client.fsGet(ctx, "link", p)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				s.rememberNotFound(p)
+				return filesystem.Entry{}, nil, errNotFound(p)
+			}
 			return filesystem.Entry{}, nil, convertErr(err)
 		}
 		cf = s.remember(p, entry, rawURL, header)
+	}
+	if cf.notFound {
+		return filesystem.Entry{}, nil, errNotFound(p)
 	}
 	if cf.entry.IsDir || cf.url == "" {
 		return toFSEntry(cf.entry), nil, nil
@@ -148,7 +172,14 @@ func (s *source) cachedFile(p string) (*cachedFile, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	cf, ok := s.files[p]
-	if !ok || time.Since(cf.at) > s.cfg.metaTTL {
+	if !ok {
+		return nil, false
+	}
+	ttl := s.cfg.metaTTL
+	if cf.notFound {
+		ttl = negativeTTL
+	}
+	if time.Since(cf.at) > ttl {
 		return nil, false
 	}
 	return cf, true
@@ -156,10 +187,18 @@ func (s *source) cachedFile(p string) (*cachedFile, bool) {
 
 func (s *source) remember(p string, entry Entry, rawURL string, header map[string]string) *cachedFile {
 	cf := &cachedFile{entry: entry, url: rawURL, head: header, at: time.Now()}
+	s.store(cf, p)
+	return cf
+}
+
+func (s *source) rememberNotFound(p string) {
+	s.store(&cachedFile{at: time.Now(), notFound: true}, p)
+}
+
+func (s *source) store(cf *cachedFile, p string) {
 	s.mu.Lock()
 	s.files[p] = cf
 	s.mu.Unlock()
-	return cf
 }
 
 func toFSEntries(list []Entry) []filesystem.Entry {

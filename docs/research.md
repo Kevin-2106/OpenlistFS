@@ -224,6 +224,26 @@ Server phase caveat: seek/playback absolute numbers fluctuate with the
 server's condition (direct-URL controls move identically); the mount tracks
 direct-URL parity in every phase we measured.
 
+### Second round of fixes (same evening, degraded server phase ~1.1 MiB/s)
+
+Real Explorer-pattern simulation (listdir + stat all + shell miss-probes +
+first 64 KiB of every file) drove three more changes:
+
+1. **Sub-block foreground granularity** (`--sub-block-size`, default 512 KiB):
+   a first-touch read used to pull a whole 4 MiB block; thumbnail-style
+   access across many files pulled one block per file. First-touch now pays
+   512 KiB; the prefetch stream still fills 4 MiB blocks underneath
+   (two-granularity L1/L2 cache).
+2. **Two prefetch streams**: the MKV pattern alternates between two hot
+   regions (clusters ↔ Cues). A single stream got cancelled by every
+   alternation; the Reader now keeps up to two streams and only replaces
+   the weakest on a third far region. Cold-mount first playback at the
+   degraded phase: **102 s → 37 s** for 30 s of content (bandwidth floor
+   alone is ~23 s); steady state 31 s; seek 5.9 s vs 9.9 s on the direct
+   URL measured the same minute.
+3. Explorer browse totals: cold first round 30 s → 14 s (dominated by
+   first-touch content at degraded bandwidth), warm round 29 ms.
+
 Why the cold 10 s decode is 10.9 s and not ~3 s: the stress test decodes as
 fast as data arrives (no pacing) and pays a ~1.2 s block-load stall on each
 region switch; real players pace at 1x and the prefetcher stays ahead of the

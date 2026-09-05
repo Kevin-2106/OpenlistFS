@@ -36,10 +36,11 @@ func cmdMount(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("mount", flag.ExitOnError)
 	debug := fs.Bool("debug", false, "verbose per-request trace")
 	window := fs.String("read-ahead", "64MiB", "read-ahead window per open file (0 disables caching)")
-	blockSize := fs.String("block-size", "4MiB", "cache block size")
+	blockSize := fs.String("block-size", "4MiB", "cache block size (prefetch granularity)")
+	subBlockSize := fs.String("sub-block-size", "512KiB", "foreground-miss granularity (0 = whole blocks)")
 	cacheSize := fs.String("cache-size", "256MiB", "total RAM cache cap")
 	concurrency := fs.Int("prefetch-concurrency", 3, "parallel prefetch fetches per file")
-	metaTTL := fs.Duration("metadata-ttl", 30*time.Second, "how long directory listings and file metadata are cached")
+	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -51,6 +52,10 @@ func cmdMount(ctx context.Context, args []string) error {
 	windowBytes, err := parseSize(*window)
 	if err != nil {
 		return fmt.Errorf("--read-ahead: %v", err)
+	}
+	subBytes, err := parseSize(*subBlockSize)
+	if err != nil {
+		return fmt.Errorf("--sub-block-size: %v", err)
 	}
 	blockBytes, err := parseSize(*blockSize)
 	if err != nil {
@@ -96,9 +101,10 @@ func cmdMount(ctx context.Context, args []string) error {
 		}
 		slog.Debug("readahead: wrapping reader", "path", p, "size", size)
 		return readahead.NewReader(mctx, p, size, inner, cache, readahead.Config{
-			BlockSize:   blockBytes,
-			Window:      windowBytes,
-			Concurrency: *concurrency,
+			BlockSize:    blockBytes,
+			SubBlockSize: subBytes,
+			Window:       windowBytes,
+			Concurrency:  *concurrency,
 		})
 	}
 

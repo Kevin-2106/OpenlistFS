@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -103,28 +102,37 @@ func TestServesContentWithCache(t *testing.T) {
 	}
 }
 
-func TestSeekCancelsStream(t *testing.T) {
+func TestTwoHotRegionsKeepStreams(t *testing.T) {
 	data := newData(256 * 1024)
 	inner := &fakeInner{data: data, honorsCtx: true}
 	cache := NewCache(1 << 20)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
-		BlockSize: 1024, Window: 128 * 1024, Concurrency: 1,
+		BlockSize: 1024, Window: 64 * 1024, Concurrency: 1,
 	})
 	defer r.Close()
 
 	buf := make([]byte, 64)
+	// Two far-apart hot regions: both get their own stream, neither is
+	// cancelled (this is the MKV clusters<->Cues pattern).
 	if _, err := r.ReadAt(buf, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.ReadAt(buf, 200*1024); err != nil {
 		t.Fatal(err)
 	}
-	if cache.Metrics.SeekCancels.Load() != 1 {
-		t.Fatalf("SeekCancels = %d, want 1", cache.Metrics.SeekCancels.Load())
+	if cache.Metrics.SeekCancels.Load() != 0 {
+		t.Fatalf("SeekCancels = %d, want 0 (second region gets its own stream)", cache.Metrics.SeekCancels.Load())
 	}
-	// The seek read must still be correct.
-	if !strings.Contains(string(data[200*1024:200*1024+64]), string(buf)) {
-		t.Fatal("content mismatch after seek")
+
+	// A third far region replaces the weakest stream -> one cancel.
+	if _, err := r.ReadAt(buf, 96*1024); err != nil {
+		t.Fatal(err)
+	}
+	if cache.Metrics.SeekCancels.Load() != 1 {
+		t.Fatalf("SeekCancels = %d, want 1 (third region replaces one stream)", cache.Metrics.SeekCancels.Load())
+	}
+	if string(buf) != string(data[96*1024:96*1024+64]) {
+		t.Fatal("content mismatch after re-anchor")
 	}
 }
 
