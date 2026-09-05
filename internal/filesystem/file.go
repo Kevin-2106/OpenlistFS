@@ -109,6 +109,16 @@ func (d *dirHandle) Readdir(count int) ([]os.FileInfo, error) {
 		for i, e := range list {
 			d.listing[i] = fileInfo{name: e.Name, e: e}
 		}
+		if d.fs.listHook != nil {
+			files := make([]Entry, 0, len(list))
+			for _, e := range list {
+				if !e.IsDir {
+					files = append(files, e)
+				}
+			}
+			hookPath := d.path
+			go d.fs.listHook(hookPath, files)
+		}
 	}
 	rest := d.listing[d.offset:]
 	if count <= 0 {

@@ -3,8 +3,10 @@ package filesystem
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/winfsp/go-winfsp/gofs"
 
@@ -15,11 +17,17 @@ import (
 // attach the read-ahead/cache layer without touching the source stack.
 type Decorator func(path string, size int64, r RangeReader) RangeReader
 
+// ListHook fires after a cold directory listing, with the freshly listed
+// canonical dir path and its file entries. Implementations use it to warm
+// caches in the background; it must not block the listing.
+type ListHook func(dir string, files []Entry)
+
 // FS implements gofs.FileSystem as a strictly read-only view of a Source.
 type FS struct {
 	src       Source
 	ctx       context.Context // governs all remote operations (cancelled on unmount)
 	decorator Decorator
+	listHook  ListHook
 }
 
 var _ gofs.FileSystem = (*FS)(nil)
@@ -30,6 +38,11 @@ type Option func(*FS)
 // WithDecorator installs a reader decorator (e.g. read-ahead).
 func WithDecorator(d Decorator) Option {
 	return func(f *FS) { f.decorator = d }
+}
+
+// WithListHook installs a post-listing cache warmer.
+func WithListHook(h ListHook) Option {
+	return func(f *FS) { f.listHook = h }
 }
 
 // New creates a read-only filesystem over src.
@@ -44,6 +57,10 @@ func New(ctx context.Context, src Source, opts ...Option) *FS {
 // OpenFile opens a file or directory read-only. Any write/create flag is
 // rejected: this filesystem is strictly read-only.
 func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (gofs.File, error) {
+	t0 := time.Now()
+	defer func() {
+		slog.Debug("fs: OpenFile", "path", name, "flag", flag, "dur", time.Since(t0).Round(time.Millisecond))
+	}()
 	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC|os.O_APPEND|os.O_EXCL) != 0 {
 		return nil, syscall.EPERM
 	}
@@ -66,6 +83,8 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (gofs.File, error
 
 // Stat returns metadata for one path (gofs calls this on every open).
 func (f *FS) Stat(name string) (os.FileInfo, error) {
+	t0 := time.Now()
+	defer func() { slog.Debug("fs: Stat", "path", name, "dur", time.Since(t0).Round(time.Millisecond)) }()
 	p := vpath.FromWin(name)
 	entry, err := f.src.Stat(f.ctx, p)
 	if err != nil {

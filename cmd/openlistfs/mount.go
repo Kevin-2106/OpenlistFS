@@ -17,6 +17,7 @@ import (
 	"openlistfs/internal/openlist"
 	"openlistfs/internal/rangeio"
 	"openlistfs/internal/readahead"
+	"openlistfs/internal/vpath"
 )
 
 // cmdMount mounts the read-only OpenList view at a drive letter via WinFsp.
@@ -109,7 +110,44 @@ func cmdMount(ctx context.Context, args []string) error {
 		})
 	}
 
-	fsys := filesystem.New(mctx, src, filesystem.WithDecorator(decorate))
+	// Warm-on-list: after a cold directory listing, fetch the head and
+	// tail sub-block of every file in the background, so the shell's
+	// property/thumbnail handlers find data already cached.
+	warmSem := make(chan struct{}, 2)
+	listHook := func(dir string, files []filesystem.Entry) {
+		if cache == nil {
+			return
+		}
+		for _, e := range files {
+			if e.Size <= 0 {
+				continue
+			}
+			select {
+			case warmSem <- struct{}{}:
+			case <-mctx.Done():
+				return
+			}
+			go func(e filesystem.Entry) {
+				defer func() { <-warmSem }()
+				full := vpath.Join(dir, e.Name)
+				_, reader, err := src.Open(mctx, full)
+				if err != nil || reader == nil {
+					return
+				}
+				wrapped := decorate(full, e.Size, reader)
+				tail := int64(512 << 10)
+				if e.Size < tail {
+					tail = e.Size
+				}
+				buf := make([]byte, tail)
+				wrapped.ReadAt(buf, 0)
+				wrapped.ReadAt(buf, e.Size-tail)
+				wrapped.Close()
+			}(e)
+		}
+	}
+
+	fsys := filesystem.New(mctx, src, filesystem.WithDecorator(decorate), filesystem.WithListHook(listHook))
 	behaviour, err := gofs.NewOptions(fsys, gofs.WithAttribReadOnlyTransMode(gofs.AttribReadOnlyAlways))
 	if err != nil {
 		return fmt.Errorf("filesystem options: %w", err)
