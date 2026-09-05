@@ -244,6 +244,20 @@ first 64 KiB of every file) drove three more changes:
 3. Explorer browse totals: cold first round 30 s → 14 s (dominated by
    first-touch content at degraded bandwidth), warm round 29 ms.
 
+### Network drive mode
+
+User feedback: thumbnails did not appear. Root cause hypothesis + fix in
+one: the mount presented itself as a **fixed disk** (GetDriveType =
+DRIVE_FIXED), so Explorer runs its local-disk pipeline — eager metadata
+scans, immediate timestamp writes (denied on a read-only FS), synchronous
+thumbnail extraction with tight timeouts. WinFsp supports a UNC Prefix
+(`\Server\Share`, fsctl.h) + network device name; mounting a drive letter
+with a prefix makes `GetDriveType` return DRIVE_REMOTE — the same
+presentation as RaiDrive. `openlistfs mount O:` now defaults to
+`--network-mode true` (opt out with `--network-mode=false`); playback and
+seek behavior is unchanged, verified 20 s realtime (21.2 s warm, 34.2 s
+cold at the degraded ~1.1 MiB/s phase).
+
 Why the cold 10 s decode is 10.9 s and not ~3 s: the stress test decodes as
 fast as data arrives (no pacing) and pays a ~1.2 s block-load stall on each
 region switch; real players pace at 1x and the prefetcher stays ahead of the

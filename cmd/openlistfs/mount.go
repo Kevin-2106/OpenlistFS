@@ -41,6 +41,7 @@ func cmdMount(ctx context.Context, args []string) error {
 	cacheSize := fs.String("cache-size", "256MiB", "total RAM cache cap")
 	concurrency := fs.Int("prefetch-concurrency", 3, "parallel prefetch fetches per file")
 	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
+	network := fs.Bool("network-mode", true, "mount as a network drive (RaiDrive-style; Explorer treats it as a remote share)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -114,12 +115,24 @@ func cmdMount(ctx context.Context, args []string) error {
 		return fmt.Errorf("filesystem options: %w", err)
 	}
 
-	mounted, err := winfsp.Mount(behaviour, mountpoint, winfsp.FileSystemName("OpenListFS"))
+	opts := []winfsp.Option{winfsp.FileSystemName("OpenListFS")}
+	if *network {
+		// Mount with a UNC prefix so Windows sees a network drive
+		// (GetDriveType = DRIVE_REMOTE): Explorer uses its remote-share
+		// pipeline — lazy thumbnails, no timestamp writes, no eager
+		// scanning — which is how RaiDrive presents drives.
+		share := strings.TrimSuffix(strings.TrimPrefix(mountpoint, "\\"), ":")
+		if share == "" {
+			share = "media"
+		}
+		opts = append(opts, winfsp.VolumePrefix(`\openlistfs\`+share))
+	}
+	mounted, err := winfsp.Mount(behaviour, mountpoint, opts...)
 	if err != nil {
 		return fmt.Errorf("mount %s: %w (is WinFsp installed and the drive letter free?)", mountpoint, err)
 	}
-	mode := fmt.Sprintf("read-ahead %s (blocks %s, cache %s, x%d)",
-		fmtBytes(windowBytes), fmtBytes(blockBytes), fmtBytes(cacheBytes), *concurrency)
+	mode := fmt.Sprintf("read-ahead %s (blocks %s, cache %s, x%d, network-mode %v)",
+		fmtBytes(windowBytes), fmtBytes(blockBytes), fmtBytes(cacheBytes), *concurrency, *network)
 	if cache == nil {
 		mode = "disabled (baseline)"
 	}

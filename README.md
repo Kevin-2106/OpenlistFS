@@ -60,6 +60,7 @@ openlistfs mount O:       # mount the read-only view at a drive letter
 | `--cache-size` | `256MiB` | total RAM cache cap (LRU) |
 | `--prefetch-concurrency` | `3` | parallel prefetch fetches per file |
 | `--metadata-ttl` | `2m` | directory listing / stat / direct-link cache lifetime |
+| `--network-mode` | `true` | present the drive as a **network drive** (RaiDrive-style): Explorer uses its remote-share pipeline — lazy thumbnails, no timestamp writes, no eager scanning. `--network-mode=false` restores a fixed disk |
 | `--debug` | off | per-request trace on stderr |
 
 `mount` requires [WinFsp](https://winfsp.dev/). Press Ctrl+C to unmount
