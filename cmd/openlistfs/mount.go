@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/winfsp/go-winfsp"
@@ -85,7 +86,7 @@ func cmdMount(ctx context.Context, args []string) error {
 
 	var cache *readahead.Cache
 	if windowBytes > 0 {
-		cache = readahead.NewCache(cacheBytes)
+		cache = readahead.NewCache(cacheBytes, *concurrency)
 	}
 	decorate := func(p string, size int64, r filesystem.RangeReader) filesystem.RangeReader {
 		if cache == nil {
@@ -105,13 +106,23 @@ func cmdMount(ctx context.Context, args []string) error {
 	}
 
 	// Warm-on-list: after a cold directory listing, fetch the head and
-	// tail sub-block of every file in the background, so the shell's
-	// property/thumbnail handlers find data already cached.
+	// tail chunk of every file in the background, so the shell's
+	// property/thumbnail handlers find data already cached. Bounded: one
+	// pass per directory per TTL, at most 32 files, yielding to the player.
+	var warmMu sync.Mutex
+	warmedDirs := make(map[string]time.Time)
 	warmSem := make(chan struct{}, 2)
 	listHook := func(dir string, files []filesystem.Entry) {
-		if cache == nil {
+		if cache == nil || len(files) == 0 || len(files) > 32 {
 			return
 		}
+		warmMu.Lock()
+		if t, seen := warmedDirs[dir]; seen && time.Since(t) < *metaTTL {
+			warmMu.Unlock()
+			return
+		}
+		warmedDirs[dir] = time.Now()
+		warmMu.Unlock()
 		for _, e := range files {
 			if e.Size <= 0 {
 				continue
@@ -141,13 +152,27 @@ func cmdMount(ctx context.Context, args []string) error {
 				if bg, ok := wrapped.(interface{ SetBackground() }); ok {
 					bg.SetBackground()
 				}
-				tail := chunkBytes
-				if e.Size < tail {
-					tail = e.Size
+				// Head chunk.
+				head := chunkBytes
+				if e.Size < head {
+					head = e.Size
 				}
-				buf := make([]byte, tail)
+				buf := make([]byte, head)
 				wrapped.ReadAt(buf, 0)
-				wrapped.ReadAt(buf, e.Size-tail)
+				// Tail chunk (chunk-aligned single fetch). Yield to the
+				// player between reads, not only between files.
+				for cache.ForegroundBusy(4 * time.Second) {
+					select {
+					case <-mctx.Done():
+						wrapped.Close()
+						return
+					case <-time.After(500 * time.Millisecond):
+					}
+				}
+				ci := (e.Size - 1) / chunkBytes
+				tailOff := ci * chunkBytes
+				buf = make([]byte, e.Size-tailOff)
+				wrapped.ReadAt(buf, tailOff)
 				wrapped.Close()
 			}(e)
 		}

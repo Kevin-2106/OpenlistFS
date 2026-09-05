@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -100,6 +101,11 @@ func (s *source) List(ctx context.Context, dir string) ([]filesystem.Entry, erro
 }
 
 func (s *source) Stat(ctx context.Context, p string) (filesystem.Entry, error) {
+	// A fresh directory listing already carries name/size/mtime: answer
+	// entry stats from it instead of paying an fs/get per file.
+	if e, ok := s.statFromListCache(p); ok {
+		return e, nil
+	}
 	cf, ok := s.cachedFile(p)
 	if ok {
 		if cf.notFound {
@@ -117,6 +123,30 @@ func (s *source) Stat(ctx context.Context, p string) (filesystem.Entry, error) {
 	}
 	s.remember(p, entry, rawURL, header)
 	return toFSEntry(entry), nil
+}
+
+// statFromListCache answers Stat from a cached parent listing.
+func (s *source) statFromListCache(p string) (filesystem.Entry, bool) {
+	i := strings.LastIndexByte(p, '/')
+	if i < 0 {
+		return filesystem.Entry{}, false
+	}
+	dir, base := p[:i], p[i+1:]
+	if dir == "" {
+		dir = "/"
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cd, ok := s.dirs[dir]
+	if !ok || time.Since(cd.at) > s.cfg.metaTTL {
+		return filesystem.Entry{}, false
+	}
+	for _, e := range cd.entries {
+		if e.Name == base {
+			return toFSEntry(e), true
+		}
+	}
+	return filesystem.Entry{}, false
 }
 
 func errNotFound(p string) error {

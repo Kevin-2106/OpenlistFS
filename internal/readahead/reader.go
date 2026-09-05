@@ -113,7 +113,10 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 		ci := pos / r.chunk
 
 		if data, ok := r.cache.Get(r.file, ci); ok && int64(len(data)) > pos-ci*r.chunk {
-			filled += copy(p[filled:], data[pos-ci*r.chunk:])
+			n := copy(p[filled:], data[pos-ci*r.chunk:])
+			r.cache.Metrics.HitBytes.Add(int64(n))
+			r.advanceStream(pos + int64(n))
+			filled += n
 			continue
 		}
 
@@ -149,6 +152,30 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 		return filled, io.EOF
 	}
 	return filled, nil
+}
+
+// advanceStream moves the owning stream's cursor forward when a cache HIT
+// falls within its reach, so the read-ahead window slides with sequential
+// consumption instead of stalling at the window edge. Hits outside every
+// stream's reach (index probes, random access) disturb nothing.
+func (r *Reader) advanceStream(end int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.streams {
+		if s == nil {
+			continue
+		}
+		if end >= s.anchor && end <= s.cursor+r.chunk {
+			if end > s.cursor {
+				s.cursor = end
+				select {
+				case s.notify <- struct{}{}:
+				default:
+				}
+			}
+			return
+		}
+	}
 }
 
 // noteMiss feeds the miss position to the prefetch streams. A miss within
@@ -223,14 +250,18 @@ func abs64(v int64) int64 {
 // time; when caught up it waits for the cursor to advance. It only exits
 // on cancellation (seek / close) or end of file.
 func (r *Reader) runPrefetch(ctx context.Context, s *stream) {
-	sem := make(chan struct{}, r.cfg.Concurrency)
-	ci := s.cursor / r.chunk
+	ci := int64(-1) // next chunk to consider; persists across iterations
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		r.mu.Lock()
 		windowEnd := s.cursor + r.cfg.Window
+		if min := s.cursor / r.chunk; ci < min {
+			// Never walk behind the playhead; chunks behind it are either
+			// cached or evicted.
+			ci = min
+		}
 		r.mu.Unlock()
 		if windowEnd > r.size {
 			windowEnd = r.size
@@ -249,13 +280,15 @@ func (r *Reader) runPrefetch(ctx context.Context, s *stream) {
 			continue
 		}
 		if !r.cache.Has(r.file, ci) {
+			// One cache-wide background budget: two streams must not
+			// double the parallel fetches fighting the player.
 			select {
-			case sem <- struct{}{}:
+			case r.cache.acquireBackground() <- struct{}{}:
 			case <-ctx.Done():
 				return
 			}
 			go func(ci int64) {
-				defer func() { <-sem }()
+				defer func() { <-r.cache.releaseBackground() }()
 				_, err := r.cache.Load(r.file, ci, true, func() ([]byte, error) {
 					return r.loadChunk(ctx, ci)
 				})

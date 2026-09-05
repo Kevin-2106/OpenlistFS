@@ -11,7 +11,7 @@ import (
 func TestFirstTouchUsesSubBlock(t *testing.T) {
 	data := newData(512 * 1024)
 	inner := &fakeInner{data: data}
-	cache := NewCache(64 << 20)
+	cache := NewCache(64<<20, 2)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
 		ChunkSize:   32 * 1024,
 		Window:      512 * 1024,
@@ -19,12 +19,12 @@ func TestFirstTouchUsesSubBlock(t *testing.T) {
 	})
 	defer r.Close()
 
-	before := inner.bytes
+	before := inner.Bytes()
 	buf := make([]byte, 4096)
 	if _, err := r.ReadAt(buf, 70000); err != nil {
 		t.Fatal(err)
 	}
-	fetched := inner.bytes - before
+	fetched := inner.Bytes() - before
 	if fetched > 64*1024 {
 		t.Fatalf("first touch fetched %d bytes, want ~sub-block (32KiB), not a whole block", fetched)
 	}

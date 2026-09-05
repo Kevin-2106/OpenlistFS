@@ -121,17 +121,20 @@ func New(ctx context.Context, link Link, opts ...Option) *Reader {
 	return r
 }
 
+// sharedTransport is reused by every range reader so connections (and TLS
+// handshakes) are pooled across files: thumbnails, warmers and players all
+// open their own readers.
+var sharedTransport http.RoundTripper = &http.Transport{
+	MaxIdleConns:          32,
+	MaxIdleConnsPerHost:   32,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+	ExpectContinueTimeout: time.Second,
+}
+
 func defaultClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			MaxIdleConns:          16,
-			MaxIdleConnsPerHost:   16,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		},
-	}
+	return &http.Client{Transport: sharedTransport}
 }
 
 // Close cancels in-flight requests and releases the connection pool.

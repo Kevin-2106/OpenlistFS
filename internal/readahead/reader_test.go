@@ -46,6 +46,22 @@ func (f *fakeInner) ReadAtContext(ctx context.Context, p []byte, off int64) (int
 
 func (f *fakeInner) Close() error { return nil }
 
+// Calls returns the request count safely for tests that inspect it while
+// prefetch workers are running.
+func (f *fakeInner) Calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// Bytes returns the fetched-byte count safely for tests that inspect it
+// while prefetch workers are running.
+func (f *fakeInner) Bytes() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bytes
+}
+
 func newData(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {
@@ -68,7 +84,7 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 func TestServesContentWithCache(t *testing.T) {
 	data := newData(64 * 1024)
 	inner := &fakeInner{data: data}
-	cache := NewCache(1 << 20)
+	cache := NewCache(1<<20, 2)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
 		ChunkSize: 1024, Window: 64 * 1024, Concurrency: 2,
 	})
@@ -105,7 +121,7 @@ func TestServesContentWithCache(t *testing.T) {
 func TestTwoHotRegionsKeepStreams(t *testing.T) {
 	data := newData(256 * 1024)
 	inner := &fakeInner{data: data, honorsCtx: true}
-	cache := NewCache(1 << 20)
+	cache := NewCache(1<<20, 2)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
 		ChunkSize: 1024, Window: 64 * 1024, Concurrency: 1,
 	})
@@ -139,7 +155,7 @@ func TestTwoHotRegionsKeepStreams(t *testing.T) {
 func TestEOFAcrossEnd(t *testing.T) {
 	data := newData(5000)
 	inner := &fakeInner{data: data}
-	cache := NewCache(1 << 20)
+	cache := NewCache(1<<20, 2)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
 		ChunkSize: 1024, Window: 4096, Concurrency: 1,
 	})
@@ -162,7 +178,7 @@ func TestLRUEvictionUnderCap(t *testing.T) {
 	data := newData(200 * 1024)
 	inner := &fakeInner{data: data}
 	// Cap fits ~2 blocks of 1024B… well below the prefetch window.
-	cache := NewCache(3 * 1024)
+	cache := NewCache(3*1024, 2)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
 		ChunkSize: 1024, Window: 128 * 1024, Concurrency: 1,
 	})
@@ -182,7 +198,7 @@ func TestPrefetchWasteAccounted(t *testing.T) {
 	data := newData(200 * 1024)
 	inner := &fakeInner{data: data}
 	// Tiny cache: prefetched blocks get evicted before being read.
-	cache := NewCache(1024)
+	cache := NewCache(1024, 1)
 	r := NewReader(context.Background(), "f", int64(len(data)), inner, cache, Config{
 		ChunkSize: 1024, Window: 128 * 1024, Concurrency: 1,
 	})

@@ -50,6 +50,10 @@ type Cache struct {
 	// background warmers can yield the connection to the player.
 	foregroundActive atomic.Int64
 
+	// bgSem caps total in-flight background chunk fetches across every
+	// reader and stream sharing this cache; foreground loads bypass it.
+	bgSem chan struct{}
+
 	mu     sync.Mutex
 	blocks map[blockKey]*block
 	elems  map[blockKey]*list.Element
@@ -60,10 +64,15 @@ type Cache struct {
 	Metrics *Metrics
 }
 
-// NewCache creates a cache capped at maxBytes of stored data.
-func NewCache(maxBytes int64) *Cache {
+// NewCache creates a cache capped at maxBytes of stored data, allowing at
+// most backgroundConcurrency in-flight background fetches in total.
+func NewCache(maxBytes int64, backgroundConcurrency int) *Cache {
+	if backgroundConcurrency <= 0 {
+		backgroundConcurrency = 3
+	}
 	return &Cache{
 		max:     maxBytes,
+		bgSem:   make(chan struct{}, backgroundConcurrency),
 		blocks:  make(map[blockKey]*block),
 		elems:   make(map[blockKey]*list.Element),
 		sizes:   make(map[blockKey]int64),
@@ -71,6 +80,9 @@ func NewCache(maxBytes int64) *Cache {
 		Metrics: &Metrics{},
 	}
 }
+
+func (c *Cache) acquireBackground() chan struct{} { return c.bgSem }
+func (c *Cache) releaseBackground() chan struct{} { return c.bgSem }
 
 // Has reports whether the block is present and fully loaded (no waiting).
 func (c *Cache) Has(file string, blockIdx int64) bool {
