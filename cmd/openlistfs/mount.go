@@ -32,6 +32,7 @@ func cmdMount(ctx context.Context, args []string) error {
 	cacheSize := fs.String("cache-size", "256MiB", "total RAM cache cap")
 	concurrency := fs.Int("prefetch-concurrency", 3, "background fetch budget")
 	network := fs.Bool("network-mode", true, "mount as a network drive (RaiDrive-style; Explorer treats it as a remote share)")
+	writable := fs.Bool("writable", false, "enable write support (local spool, upload on close; needs server write permissions)")
 	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -76,6 +77,7 @@ func cmdMount(ctx context.Context, args []string) error {
 		CacheSize:   cacheBytes,
 		Concurrency: *concurrency,
 		MetaTTL:     *metaTTL,
+		Writable:    *writable,
 	})
 	if err != nil {
 		return err

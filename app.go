@@ -23,6 +23,7 @@ type MountOptions struct {
 	CacheMiB     int    `json:"cacheMiB"`
 	Workers      int    `json:"workers"`
 	TTLMinutes   int    `json:"ttlMinutes"`
+	Writable     bool   `json:"writable"`
 }
 
 // StatusView is what the UI polls once a second.
@@ -271,6 +272,7 @@ func (a *App) Mount(opts MountOptions) string {
 		CacheSize:   int64(opts.CacheMiB) << 20,
 		Concurrency: opts.Workers,
 		MetaTTL:     time.Duration(opts.TTLMinutes) * time.Minute,
+		Writable:    opts.Writable,
 	})
 	if err != nil {
 		a.setErr(err.Error())

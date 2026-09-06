@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -423,6 +424,61 @@ func (c *Client) resolveViaFsLink(ctx context.Context, p string) (*Link, error) 
 		Source:     "fs/link",
 		ResolvedAt: time.Now(),
 	}, nil
+}
+
+// Mkdir creates a directory.
+func (c *Client) Mkdir(ctx context.Context, p string) error {
+	return c.call(ctx, "mkdir", "/api/fs/mkdir", map[string]any{"path": p}, nil)
+}
+
+// Remove deletes names inside dir (files and/or directories).
+func (c *Client) Remove(ctx context.Context, dir string, names []string) error {
+	return c.call(ctx, "remove", "/api/fs/remove",
+		map[string]any{"dir": dir, "names": names}, nil)
+}
+
+// Rename renames/moves one object within its directory.
+func (c *Client) Rename(ctx context.Context, p, newName string) error {
+	return c.call(ctx, "rename", "/api/fs/rename",
+		map[string]any{"path": p, "name": newName}, nil)
+}
+
+// Upload streams r (exactly size bytes) to the remote path via PUT
+// /api/fs/put. Overwrite is always enabled; the upload is synchronous.
+func (c *Client) Upload(ctx context.Context, p string, size int64, r io.Reader) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.BaseURL+"/api/fs/put", r)
+	if err != nil {
+		return fmt.Errorf("openlist: upload: %w", err)
+	}
+	req.ContentLength = size
+	req.Header.Set("File-Path", url.PathEscape(p))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("As-Task", "false")
+	req.Header.Set("Overwrite", "true")
+	if tok := c.currentToken(); tok != "" {
+		req.Header.Set("Authorization", tok)
+	}
+	t0 := time.Now()
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("openlist: upload: %w", err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("openlist: upload: reading response: %w", err)
+	}
+	var env envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("openlist: upload: unexpected response (HTTP %d): %w", resp.StatusCode, err)
+	}
+	if env.Code != 200 {
+		slog.Debug("openlist: upload done", "path", p, "size", size,
+			"dur", time.Since(t0).Round(time.Millisecond))
+		return &Error{Op: "upload", Path: p, Code: env.Code, Message: env.Message}
+	}
+	slog.Debug("openlist: upload ok", "path", p, "size", size, "dur", time.Since(t0).Round(time.Millisecond))
+	return nil
 }
 
 // decodeHeader accepts the "header" field in both shapes seen in the wild:

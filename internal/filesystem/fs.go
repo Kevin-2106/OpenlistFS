@@ -28,6 +28,7 @@ type FS struct {
 	ctx       context.Context // governs all remote operations (cancelled on unmount)
 	decorator Decorator
 	listHook  ListHook
+	writable  bool
 }
 
 var _ gofs.FileSystem = (*FS)(nil)
@@ -43,6 +44,13 @@ func WithDecorator(d Decorator) Option {
 // WithListHook installs a post-listing cache warmer.
 func WithListHook(h ListHook) Option {
 	return func(f *FS) { f.listHook = h }
+}
+
+// WithWritable enables write support: mutations map to the Source's Writer
+// and file handles buffer writes locally, uploading on last close. Without
+// it every mutation is EPERM (the default — this is a read-only PoC).
+func WithWritable(w bool) Option {
+	return func(f *FS) { f.writable = w }
 }
 
 // New creates a read-only filesystem over src.
@@ -61,10 +69,22 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (gofs.File, error
 	defer func() {
 		slog.Debug("fs: OpenFile", "path", name, "flag", flag, "dur", time.Since(t0).Round(time.Millisecond))
 	}()
-	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC|os.O_APPEND|os.O_EXCL) != 0 {
+	writeIntent := flag&(os.O_WRONLY|os.O_RDWR) != 0
+	if !f.writable && flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC|os.O_APPEND|os.O_EXCL) != 0 {
 		return nil, syscall.EPERM
 	}
 	p := vpath.FromWin(name)
+
+	if f.writable && writeIntent {
+		return f.openWritable(p, flag)
+	}
+	if f.writable && flag&os.O_CREATE != 0 {
+		// Read-only open with create disposition: behave as a plain open
+		// when the file exists; create nothing.
+		if _, err := f.src.Stat(f.ctx, p); errors.Is(err, os.ErrNotExist) {
+			return nil, syscall.ENOENT
+		}
+	}
 	entry, reader, err := f.src.Open(f.ctx, p)
 	if err != nil {
 		return nil, mapErr(err)
@@ -81,6 +101,92 @@ func (f *FS) OpenFile(name string, flag int, perm os.FileMode) (gofs.File, error
 	return newFileHandle(p, entry, reader), nil
 }
 
+// openWritable implements the writable-mode open path: an overlay handle
+// that serves reads from remote+spool and uploads on last close.
+func (f *FS) openWritable(p string, flag int) (gofs.File, error) {
+	entry, statErr := f.src.Stat(f.ctx, p)
+	exists := statErr == nil
+	if !exists {
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, mapErr(statErr)
+		}
+		if flag&os.O_CREATE == 0 {
+			return nil, syscall.ENOENT
+		}
+	}
+	if exists && flag&os.O_CREATE != 0 && flag&os.O_EXCL != 0 {
+		return nil, syscall.EEXIST
+	}
+	truncate := exists && flag&os.O_TRUNC != 0
+
+	var remote RangeReader
+	hasRemote := exists && !entry.IsDir
+	if hasRemote {
+		_, reader, err := f.src.Open(f.ctx, p)
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		if f.decorator != nil && reader != nil {
+			reader = f.decorator(p, entry.Size, reader)
+		}
+		remote = reader
+	}
+
+	spool, err := os.CreateTemp("", "openlistfs-w-*.spool")
+	if err != nil {
+		if remote != nil {
+			remote.Close()
+		}
+		return nil, err
+	}
+
+	writer, ok := f.src.(Writer)
+	if !ok {
+		spool.Close()
+		if remote != nil {
+			remote.Close()
+		}
+		return nil, syscall.EPERM
+	}
+	return newOverlayHandle(f, p, entry, remote, hasRemote, truncate, spool, writer), nil
+}
+
+// Mkdir creates a remote directory when writable.
+func (f *FS) Mkdir(name string, perm os.FileMode) error {
+	if !f.writable {
+		return syscall.EPERM
+	}
+	w, ok := f.src.(Writer)
+	if !ok {
+		return syscall.EPERM
+	}
+	return mapErr(w.Mkdir(f.ctx, vpath.FromWin(name)))
+}
+
+// Remove deletes a remote file or directory tree when writable.
+func (f *FS) Remove(name string) error {
+	if !f.writable {
+		return syscall.EPERM
+	}
+	w, ok := f.src.(Writer)
+	if !ok {
+		return syscall.EPERM
+	}
+	return mapErr(w.Remove(f.ctx, vpath.FromWin(name)))
+}
+
+// Rename renames a remote object when writable.
+func (f *FS) Rename(source, target string) error {
+	if !f.writable {
+		return syscall.EPERM
+	}
+	w, ok := f.src.(Writer)
+	if !ok {
+		return syscall.EPERM
+	}
+	return mapErr(w.Rename(f.ctx, vpath.FromWin(source), vpath.Base(vpath.FromWin(target))))
+}
+
 // Stat returns metadata for one path (gofs calls this on every open).
 func (f *FS) Stat(name string) (os.FileInfo, error) {
 	t0 := time.Now()
@@ -92,12 +198,6 @@ func (f *FS) Stat(name string) (os.FileInfo, error) {
 	}
 	return fileInfo{name: vpath.Base(p), e: entry}, nil
 }
-
-func (f *FS) Mkdir(name string, perm os.FileMode) error { return syscall.EPERM }
-
-func (f *FS) Remove(name string) error { return syscall.EPERM }
-
-func (f *FS) Rename(source, target string) error { return syscall.EPERM }
 
 // mapErr converts source errors to the syscall.Errno values gofs maps onto
 // NTSTATUS; anything unrecognized stays as-is (STATUS_INTERNAL_ERROR in gofs).

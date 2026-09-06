@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -230,6 +232,65 @@ func (s *source) store(cf *cachedFile, p string) {
 	s.files[p] = cf
 	s.mu.Unlock()
 }
+
+// ---- filesystem.Writer ----
+
+func parentDir(p string) string { return path.Dir(p) }
+
+func baseName(p string) string { return path.Base(p) }
+
+func (s *source) invalidate(dir string) {
+	s.mu.Lock()
+	delete(s.dirs, dir)
+	s.mu.Unlock()
+}
+
+func (s *source) invalidateFile(p string) {
+	s.mu.Lock()
+	delete(s.files, p)
+	s.mu.Unlock()
+}
+
+func (s *source) Mkdir(ctx context.Context, p string) error {
+	err := s.client.Mkdir(ctx, p)
+	if err != nil {
+		return convertErr(err)
+	}
+	s.invalidate(parentDir(p))
+	return nil
+}
+
+func (s *source) Remove(ctx context.Context, p string) error {
+	err := s.client.Remove(ctx, parentDir(p), []string{baseName(p)})
+	if err != nil {
+		return convertErr(err)
+	}
+	s.invalidate(parentDir(p))
+	s.invalidateFile(p)
+	return nil
+}
+
+func (s *source) Rename(ctx context.Context, p, newName string) error {
+	err := s.client.Rename(ctx, p, newName)
+	if err != nil {
+		return convertErr(err)
+	}
+	s.invalidate(parentDir(p))
+	s.invalidateFile(p)
+	return nil
+}
+
+func (s *source) Upload(ctx context.Context, p string, size int64, r io.Reader) error {
+	if err := s.client.Upload(ctx, p, size, r); err != nil {
+		return convertErr(err)
+	}
+	s.invalidate(parentDir(p))
+	s.invalidateFile(p)
+	return nil
+}
+
+// InvalidateDir drops the cached listing of dir.
+func (s *source) InvalidateDir(dir string) { s.invalidate(dir) }
 
 func toFSEntries(list []Entry) []filesystem.Entry {
 	out := make([]filesystem.Entry, len(list))

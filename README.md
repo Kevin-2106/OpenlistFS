@@ -1,13 +1,26 @@
 # OpenListFS
 
-OpenListFS is currently a **read-only performance proof-of-concept** — a native
-Windows virtual filesystem client for OpenList, optimized for large-file /
-video playback scenarios.
+OpenListFS is a native Windows virtual filesystem client for OpenList,
+optimized for large-file / video playback scenarios. It mounts **read-only
+by default**; an opt-in writable mode exists (see below).
 
-**NOT SUPPORTED:**
+**Writable mode** (`--writable` / GUI checkbox, off by default):
 
-- writes, uploads, rename, delete
-- production use of any kind
+- New and existing files opened for writing are buffered in a local spool
+  file (overlay: written ranges from spool, untouched ranges from remote)
+  and uploaded via `PUT /api/fs/put` on close — OpenList only supports
+  whole-file upload, so in-place random writes trigger a merged re-upload
+  of the entire file at close.
+- mkdir / rename / remove map to the OpenList APIs directly.
+- Server permissions still apply. Permission bits needed (OpenList user
+  model): write content (bit 3) for mkdir/upload, rename (bit 4),
+  remove (bit 7). Ops the account cannot perform surface as errors —
+  e.g. uploads into freshly created subdirectories may be denied by the
+  server depending on its configuration. Writes also become visible to
+  re-opens only after OpenList's own metadata cache refreshes (~1 s).
+
+**Still NOT SUPPORTED:** production use, crash consistency (uploads happen
+at close; a crash loses the pending changes), multi-writer coordination.
 
 The only goal of the current phase of this project is to verify whether the path
 

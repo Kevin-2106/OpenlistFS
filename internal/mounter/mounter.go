@@ -24,18 +24,18 @@ import (
 
 // Config is everything needed to bring up one mount.
 type Config struct {
-	URL          string
-	Token        string
-	Username     string
-	Password     string
-	Mountpoint   string // e.g. "O:"
-	Network      bool   // present as a network drive
-	Window       int64  // read-ahead window per open file (bytes; 0 disables caching)
-	ChunkSize    int64  // fetch/cache granularity
-	CacheSize    int64  // total RAM cache cap
-	Concurrency  int    // background fetch budget
-	MetaTTL      time.Duration
-	shareBacking bool
+	URL         string
+	Token       string
+	Username    string
+	Password    string
+	Mountpoint  string // e.g. "O:"
+	Network     bool   // present as a network drive
+	Window      int64  // read-ahead window per open file (bytes; 0 disables caching)
+	ChunkSize   int64  // fetch/cache granularity
+	CacheSize   int64  // total RAM cache cap
+	Concurrency int    // background fetch budget
+	MetaTTL     time.Duration
+	Writable    bool // enable write support (mutations + overlay uploads)
 }
 
 // Session is one live mount.
@@ -183,9 +183,12 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		}
 	}
 
-	fsys := filesystem.New(mctx, src,
+	fsOpts := []filesystem.Option{
 		filesystem.WithDecorator(decorate),
-		filesystem.WithListHook(listHook))
+		filesystem.WithListHook(listHook),
+		filesystem.WithWritable(cfg.Writable),
+	}
+	fsys := filesystem.New(mctx, src, fsOpts...)
 	behaviour, err := gofs.NewOptions(fsys, gofs.WithAttribReadOnlyTransMode(gofs.AttribReadOnlyAlways))
 	if err != nil {
 		cancel()

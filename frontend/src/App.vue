@@ -49,6 +49,7 @@ const opts = reactive({
   cacheMiB: 256,
   workers: 3,
   ttlMinutes: 2,
+  writable: false,
 })
 
 const status = reactive<Status>({
@@ -262,6 +263,10 @@ onUnmounted(() => window.clearInterval(timer))
     <div class="check">
       <input type="checkbox" id="nw" v-model="opts.network" :disabled="mountedNow" />
       <label for="nw">Network drive mode (recommended — Explorer remote-share pipeline)</label>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="wr" v-model="opts.writable" :disabled="mountedNow" />
+      <label for="wr">Writable (needs server write permission; uploads on file close)</label>
     </div>
     <div class="row" style="margin-top: 14px; align-items: center">
       <button v-if="!mountedNow" @click="doMount" :disabled="busy">Mount</button>
