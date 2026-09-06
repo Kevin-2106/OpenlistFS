@@ -43,6 +43,15 @@ h2 { font-size: 13px; margin: 0 0 10px; color: #8fa0c2; text-transform: uppercas
   outline: none;
 }
 .field input:focus { border-color: #4f7cd6; }
+.field select {
+  background: #181a20;
+  border: 1px solid #343b4d;
+  color: #e2e6ee;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+}
 
 .check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #b7c1d4; margin-top: 16px; }
 

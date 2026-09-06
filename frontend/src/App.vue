@@ -32,7 +32,14 @@ interface Status {
 }
 
 const cfg = reactive<Cfg>({ url: '', token: '', username: '', password: '' })
-function string0() { return '' }
+
+const profilesUi = reactive({
+  names: [] as string[],
+  active: '',
+  autoMount: false,
+  autostart: false,
+  newProfileName: '',
+})
 
 const opts = reactive({
   drive: 'O:',
@@ -55,20 +62,75 @@ const busy = ref(false)
 const saveMsg = ref('')
 const mountedNow = ref(false)
 
-async function loadConfig() {
-  const c = await wails().GetConfig()
+async function loadProfiles() {
+  const p = await wails().GetProfiles()
+  profilesUi.names = p.names || []
+  profilesUi.active = p.active || ''
+  profilesUi.autoMount = !!p.autoMount
+  profilesUi.autostart = await wails().GetAutostart()
+  if (profilesUi.active) await loadProfile(profilesUi.active)
+  else await loadLegacy()
+}
+
+async function loadLegacy() {
+  const c = await wails().GetActiveConfig()
   cfg.url = c.url || ''
   cfg.token = c.token || ''
   cfg.username = c.username || ''
   cfg.password = c.password || ''
 }
 
-async function saveConfig() {
-  saveMsg.value = await wails().SaveConfig({ ...cfg })
-  if (!saveMsg.value) {
-    saveMsg.value = 'saved ✓'
+async function loadProfile(name: string) {
+  const p = await wails().GetProfile(name)
+  cfg.url = p.url || ''
+  cfg.token = p.token || ''
+  cfg.username = p.username || ''
+  cfg.password = p.password || ''
+}
+
+async function switchProfile() {
+  if (!profilesUi.active) return
+  const err = await wails().SetActiveProfile(profilesUi.active)
+  if (err) { status.error = err; return }
+  await loadProfile(profilesUi.active)
+}
+
+async function saveProfile() {
+  const name = profilesUi.newProfileName || profilesUi.active
+  if (!name) { saveMsg.value = 'profile name required'; return }
+  const err = await wails().SaveProfile(name, { ...cfg })
+  saveMsg.value = err || 'saved ✓'
+  if (!err) {
+    profilesUi.active = name
+    if (!profilesUi.names.includes(name)) profilesUi.names.push(name)
     setTimeout(() => (saveMsg.value = ''), 2500)
   }
+}
+
+async function deleteProfile() {
+  if (!profilesUi.active) return
+  const err = await wails().DeleteProfile(profilesUi.active)
+  if (err) { status.error = err; return }
+  profilesUi.newProfileName = ''
+  await loadProfiles()
+}
+
+async function toggleAutostart() {
+  profilesUi.autostart = !profilesUi.autostart
+  const err = await wails().SetAutostart(profilesUi.autostart)
+  if (err) { profilesUi.autostart = !profilesUi.autostart; status.error = err }
+}
+
+async function toggleAutoMount() {
+  profilesUi.autoMount = !profilesUi.autoMount
+  const err = await wails().SetAutoMount(profilesUi.autoMount)
+  if (err) { profilesUi.autoMount = !profilesUi.autoMount; status.error = err }
+}
+
+async function saveOptions() {
+  const err = await wails().SaveOptions({ ...opts })
+  saveMsg.value = err || 'options saved ✓'
+  if (!err) setTimeout(() => (saveMsg.value = ''), 2500)
 }
 
 async function doMount() {
@@ -108,7 +170,10 @@ function fmtUptime(s: number): string {
 
 let timer: number | undefined
 onMounted(() => {
-  loadConfig()
+  loadProfiles()
+  wails().GetOptions().then((o: any) => {
+    if (o && o.drive) Object.assign(opts, o)
+  })
   timer = window.setInterval(async () => {
     const s = await wails().GetStatus()
     Object.assign(status, s)
@@ -141,12 +206,32 @@ onUnmounted(() => window.clearInterval(timer))
       </div>
     </div>
     <div class="row" style="align-items: end">
-      <div class="field">
+      <div class="field" style="max-width: 220px">
+        <label>Profile</label>
+        <select v-model="profilesUi.active" @change="switchProfile">
+          <option v-for="n in profilesUi.names" :key="n" :value="n">{{ n }}</option>
+          <option v-if="!profilesUi.names.length" value="">(default from .env)</option>
+        </select>
+      </div>
+      <div class="field" style="max-width: 220px">
+        <label>Save as / rename to</label>
+        <input type="text" v-model="profilesUi.newProfileName" placeholder="profile name" />
+      </div>
+      <button class="secondary" @click="saveProfile" :disabled="busy">Save profile</button>
+      <button class="danger" @click="deleteProfile" :disabled="busy || !profilesUi.active">Delete</button>
+      <span class="msg">{{ saveMsg }}</span>
+    </div>
+    <div class="row" style="align-items: end">
+      <div class="field" style="flex: 2">
         <label>Token (alternative to user/password)</label>
         <input type="password" v-model="cfg.token" autocomplete="off" />
       </div>
-      <button class="secondary" @click="saveConfig" :disabled="busy">Save .env</button>
-      <span class="msg">{{ saveMsg }}</span>
+      <button class="secondary" @click="toggleAutostart">
+        {{ profilesUi.autostart ? '开机自启: ON' : '开机自启: OFF' }}
+      </button>
+      <button class="secondary" @click="toggleAutoMount">
+        {{ profilesUi.autoMount ? '启动自动挂载: ON' : '启动自动挂载: OFF' }}
+      </button>
     </div>
   </div>
 
@@ -181,6 +266,7 @@ onUnmounted(() => window.clearInterval(timer))
     <div class="row" style="margin-top: 14px; align-items: center">
       <button v-if="!mountedNow" @click="doMount" :disabled="busy">Mount</button>
       <button v-else class="danger" @click="doUnmount" :disabled="busy">Unmount</button>
+      <button class="secondary" @click="saveOptions" :disabled="mountedNow">Save options</button>
       <span class="badge" :class="mountedNow ? 'on' : 'off'">
         {{ mountedNow ? `MOUNTED ${status.mountpoint}` : 'NOT MOUNTED' }}
       </span>

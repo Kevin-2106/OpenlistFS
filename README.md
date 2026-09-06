@@ -47,10 +47,18 @@ wails build            # requires Node/npm + Wails CLI (go install github.com/wa
 ./build/bin/openlistfs-gui.exe
 ```
 
-The GUI wraps the same mounter: enter the server URL and credentials
-(saved to `.env`), pick a drive letter, press Mount. It shows live session
-statistics (requests, TTFB, cache hit ratio, prefetch waste) polled from
-the running mount.
+The GUI wraps the same mounter: pick a drive letter, press Mount. It
+shows live session statistics (requests, TTFB, cache hit ratio, prefetch
+waste) polled from the running mount.
+
+Features beyond the CLI:
+- **System tray**: closing the window hides to tray; tray menu has
+  show/mount-unmount/quit (quit unmounts first).
+- **Multiple profiles**: save several server configurations
+  (`profiles.json` next to the exe — plain-text passwords, never commit
+  it); the active profile is synced to `.env` for the CLI.
+- **Boot auto-start**: per-user `HKCU\...\Run` entry launching
+  `--minimized --automount` (starts in tray, mounts the active profile).
 
 ## Usage — CLI
 
