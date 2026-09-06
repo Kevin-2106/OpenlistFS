@@ -6,24 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/winfsp/go-winfsp"
-	"github.com/winfsp/go-winfsp/gofs"
-
-	"openlistfs/internal/filesystem"
-	"openlistfs/internal/openlist"
-	"openlistfs/internal/rangeio"
-	"openlistfs/internal/readahead"
-	"openlistfs/internal/vpath"
+	"openlistfs/internal/mounter"
 )
 
-// cmdMount mounts the read-only OpenList view at a drive letter via WinFsp.
-// An optional RAM read-ahead layer turns WinFsp's small reads into large
-// sequential fetches; --read-ahead 0 disables it (Phase 2 baseline).
+// cmdMount mounts the read-only OpenList view at a drive letter via WinFsp
+// using the shared mounter package. `openlistfs-gui` uses the same package.
 func cmdMount(ctx context.Context, args []string) error {
 	// Allow both "mount O: --flags" and "mount --flags O:".
 	drive := ""
@@ -40,14 +30,14 @@ func cmdMount(ctx context.Context, args []string) error {
 	window := fs.String("read-ahead", "64MiB", "read-ahead window per open file (0 disables caching)")
 	chunkSize := fs.String("chunk-size", "512KiB", "fetch/cache chunk granularity")
 	cacheSize := fs.String("cache-size", "256MiB", "total RAM cache cap")
-	concurrency := fs.Int("prefetch-concurrency", 3, "parallel prefetch fetches per file")
-	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
+	concurrency := fs.Int("prefetch-concurrency", 3, "background fetch budget")
 	network := fs.Bool("network-mode", true, "mount as a network drive (RaiDrive-style; Explorer treats it as a remote share)")
+	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
 	if drive == "" {
-		return fmt.Errorf("usage: openlistfs mount <drive> [--read-ahead N] [--block-size N] [--cache-size N] [--prefetch-concurrency N] [--debug]\n   e.g. openlistfs mount O:")
+		return fmt.Errorf("usage: openlistfs mount <drive> [--read-ahead N] [--chunk-size N] [--cache-size N] [--prefetch-concurrency N] [--network-mode=false] [--debug]\n   e.g. openlistfs mount O:")
 	}
 	mountpoint := drive
 
@@ -70,176 +60,68 @@ func cmdMount(ctx context.Context, args []string) error {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	mctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	c, err := buildClient(mctx, cfg)
+	session, err := mounter.Start(ctx, mounter.Config{
+		URL:         cfg.URL,
+		Token:       cfg.Token,
+		Username:    cfg.Username,
+		Password:    cfg.Password,
+		Mountpoint:  mountpoint,
+		Network:     *network,
+		Window:      windowBytes,
+		ChunkSize:   chunkBytes,
+		CacheSize:   cacheBytes,
+		Concurrency: *concurrency,
+		MetaTTL:     *metaTTL,
+	})
 	if err != nil {
 		return err
 	}
-	metrics := &rangeio.Metrics{}
-	src := c.Source(openlist.WithSourceMetrics(metrics), openlist.WithMetadataTTL(*metaTTL))
-
-	var cache *readahead.Cache
+	mode := "disabled (baseline)"
 	if windowBytes > 0 {
-		cache = readahead.NewCache(cacheBytes, *concurrency)
-	}
-	decorate := func(p string, size int64, r filesystem.RangeReader) filesystem.RangeReader {
-		if cache == nil {
-			return r
-		}
-		inner, ok := r.(readahead.Inner)
-		if !ok {
-			slog.Error("readahead: decorator assertion failed", "type", fmt.Sprintf("%T", r))
-			return r
-		}
-		slog.Debug("readahead: wrapping reader", "path", p, "size", size)
-		return readahead.NewReader(mctx, p, size, inner, cache, readahead.Config{
-			ChunkSize:   chunkBytes,
-			Window:      windowBytes,
-			Concurrency: *concurrency,
-		})
-	}
-
-	// Warm-on-list: after a cold directory listing, fetch the head and
-	// tail chunk of every file in the background, so the shell's
-	// property/thumbnail handlers find data already cached. Bounded: one
-	// pass per directory per TTL, at most 32 files, yielding to the player.
-	var warmMu sync.Mutex
-	warmedDirs := make(map[string]time.Time)
-	warmSem := make(chan struct{}, 2)
-	listHook := func(dir string, files []filesystem.Entry) {
-		if cache == nil || len(files) == 0 || len(files) > 32 {
-			return
-		}
-		warmMu.Lock()
-		if t, seen := warmedDirs[dir]; seen && time.Since(t) < *metaTTL {
-			warmMu.Unlock()
-			return
-		}
-		warmedDirs[dir] = time.Now()
-		warmMu.Unlock()
-		for _, e := range files {
-			if e.Size <= 0 {
-				continue
-			}
-			select {
-			case warmSem <- struct{}{}:
-			case <-mctx.Done():
-				return
-			}
-			go func(e filesystem.Entry) {
-				defer func() { <-warmSem }()
-				// Yield to the player: while a foreground miss happened
-				// recently, warmers wait.
-				for cache.ForegroundBusy(4 * time.Second) {
-					select {
-					case <-mctx.Done():
-						return
-					case <-time.After(500 * time.Millisecond):
-					}
-				}
-				full := vpath.Join(dir, e.Name)
-				_, reader, err := src.Open(mctx, full)
-				if err != nil || reader == nil {
-					return
-				}
-				wrapped := decorate(full, e.Size, reader)
-				if bg, ok := wrapped.(interface{ SetBackground() }); ok {
-					bg.SetBackground()
-				}
-				// Head chunk.
-				head := chunkBytes
-				if e.Size < head {
-					head = e.Size
-				}
-				buf := make([]byte, head)
-				wrapped.ReadAt(buf, 0)
-				// Tail chunk (chunk-aligned single fetch). Yield to the
-				// player between reads, not only between files.
-				for cache.ForegroundBusy(4 * time.Second) {
-					select {
-					case <-mctx.Done():
-						wrapped.Close()
-						return
-					case <-time.After(500 * time.Millisecond):
-					}
-				}
-				ci := (e.Size - 1) / chunkBytes
-				tailOff := ci * chunkBytes
-				buf = make([]byte, e.Size-tailOff)
-				wrapped.ReadAt(buf, tailOff)
-				wrapped.Close()
-			}(e)
-		}
-	}
-
-	fsys := filesystem.New(mctx, src, filesystem.WithDecorator(decorate), filesystem.WithListHook(listHook))
-	behaviour, err := gofs.NewOptions(fsys, gofs.WithAttribReadOnlyTransMode(gofs.AttribReadOnlyAlways))
-	if err != nil {
-		return fmt.Errorf("filesystem options: %w", err)
-	}
-
-	opts := []winfsp.Option{winfsp.FileSystemName("OpenListFS")}
-	if *network {
-		// Mount with a UNC prefix so Windows sees a network drive
-		// (GetDriveType = DRIVE_REMOTE): Explorer uses its remote-share
-		// pipeline — lazy thumbnails, no timestamp writes, no eager
-		// scanning — which is how RaiDrive presents drives.
-		share := strings.TrimSuffix(strings.TrimPrefix(mountpoint, "\\"), ":")
-		if share == "" {
-			share = "media"
-		}
-		opts = append(opts, winfsp.VolumePrefix(`\openlistfs\`+share))
-	}
-	mounted, err := winfsp.Mount(behaviour, mountpoint, opts...)
-	if err != nil {
-		return fmt.Errorf("mount %s: %w (is WinFsp installed and the drive letter free?)", mountpoint, err)
-	}
-	mode := fmt.Sprintf("read-ahead %s (chunks %s, cache %s, x%d, network-mode %v)",
-		fmtBytes(windowBytes), fmtBytes(chunkBytes), fmtBytes(cacheBytes), *concurrency, *network)
-	if cache == nil {
-		mode = "disabled (baseline)"
+		mode = fmt.Sprintf("read-ahead %s (chunks %s, cache %s, x%d, network-mode %v)",
+			fmtBytes2(windowBytes), fmtBytes2(chunkBytes), fmtBytes2(cacheBytes), *concurrency, *network)
 	}
 	fmt.Printf("mounted %s — Ctrl+C to unmount\n", mountpoint)
 	fmt.Printf("server:     %s\n", cfg.URL)
 	fmt.Printf("read-ahead: %s\n", mode)
 
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
-	<-ch
+	session.WaitSignal()
 
 	fmt.Println("\nunmounting…")
-	cancel() // stop all in-flight remote reads first
-	mounted.Unmount()
-	printSessionStats(metrics, cache)
+	session.Unmount()
+	printStats(session.Stats())
 	return nil
 }
 
-func printSessionStats(m *rangeio.Metrics, cache *readahead.Cache) {
-	s := m.Snapshot()
+func printStats(st mounter.Status) {
 	fmt.Println("Session statistics:")
-	fmt.Printf("  ReadAt calls:      %d\n", s.RangeRequests)
+	fmt.Printf("  ReadAt calls:      %d\n", st.ReadAtCalls)
 	fmt.Printf("  HTTP requests:     %d (retries %d, link re-resolves %d)\n",
-		s.Requests, s.Retries, s.LinkResolves)
-	fmt.Printf("  Downloaded:        %s\n", fmtBytes(s.BytesFetched))
-	fmt.Printf("  Avg TTFB:          %s\n", s.AvgTTFB().Round(time.Millisecond))
-	if cache != nil {
-		cm := cache.Metrics
-		served := cm.HitBytes.Load() + cm.MissBytes.Load()
-		ratio := 0.0
-		if served > 0 {
-			ratio = float64(cm.HitBytes.Load()) / float64(served) * 100
-		}
+		st.HTTPReqs, st.Retries, st.LinkResolves)
+	fmt.Printf("  Downloaded:        %s\n", fmtBytes2(st.BytesFetched))
+	fmt.Printf("  Avg TTFB:          %.0f ms\n", st.AvgTTFBms)
+	if st.HitBytes+st.MissBytes > 0 {
 		fmt.Printf("  Cache served:      %s (%.1f%% hit, %s RAM in use)\n",
-			fmtBytes(cm.HitBytes.Load()), ratio, fmtBytes(cache.Used()))
-		fmt.Printf("  Foreground fetch:  %s\n", fmtBytes(cm.MissBytes.Load()))
+			fmtBytes2(st.HitBytes), st.HitRatio, fmtBytes2(st.RAMInUse))
+		fmt.Printf("  Foreground fetch:  %s\n", fmtBytes2(st.MissBytes))
 		fmt.Printf("  Prefetch:          %s fetched, %s wasted unread, %d seek cancels\n",
-			fmtBytes(cm.PrefetchBytes.Load()), fmtBytes(cm.PrefetchWaste.Load()),
-			cm.SeekCancels.Load())
+			fmtBytes2(st.PrefetchBytes), fmtBytes2(st.PrefetchWaste), st.SeekCancels)
 	}
+}
+
+func fmtBytes2(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }

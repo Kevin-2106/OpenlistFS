@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	cfgpkg "openlistfs/internal/config"
 	"openlistfs/internal/openlist"
 	"openlistfs/internal/vpath"
 )
@@ -79,7 +80,7 @@ func newClient(ctx context.Context) (*openlist.Client, error) {
 	return buildClient(ctx, cfg)
 }
 
-func buildClient(ctx context.Context, cfg config) (*openlist.Client, error) {
+func buildClient(ctx context.Context, cfg cfgpkg.Config) (*openlist.Client, error) {
 	var opts []openlist.Option
 	if cfg.Token != "" {
 		opts = append(opts, openlist.WithToken(cfg.Token))

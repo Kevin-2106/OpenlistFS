@@ -40,7 +40,19 @@ directory — see [.env.example](.env.example), never committed):
 Tokens and signed URLs are never logged; direct-link query strings are
 redacted in all diagnostics.
 
-## Usage
+## Usage — GUI
+
+```text
+wails build            # requires Node/npm + Wails CLI (go install github.com/wailsapp/wails/v2/cmd/wails@latest)
+./build/bin/openlistfs-gui.exe
+```
+
+The GUI wraps the same mounter: enter the server URL and credentials
+(saved to `.env`), pick a drive letter, press Mount. It shows live session
+statistics (requests, TTFB, cache hit ratio, prefetch waste) polled from
+the running mount.
+
+## Usage — CLI
 
 ```text
 openlistfs probe          # server reachability + auth check
@@ -86,9 +98,11 @@ without the leading slash (`openlistfs ls Movies`).
   ~3.6 MiB/s (server-capped) link. Cache-populating foreground loads +
   hit-reads-don't-disturb-the-stream were the two design decisions that
   mattered (details in docs/research.md).
-- Next: the project's stop condition has been evaluated — see
-  [docs/benchmark.md](docs/benchmark.md): seek parity with direct HTTP,
-  ~2.2× faster than default rclone mount, realtime playback holds. Scope
-  expansion is a user decision from here.
+- Stop condition evaluated — see [docs/benchmark.md](docs/benchmark.md):
+  seek parity with direct HTTP, ~2.2× faster than default rclone mount,
+  realtime playback holds.
+- GUI (user-approved scope expansion): Wails v2 + Vue 3 desktop app
+  (mount/unmount, options, live session statistics) sharing the same
+  `internal/mounter` core as the CLI.
 - Phase 4 (never, by design): writes, GUI, disk cache, product polish —
   unless the Phase 3 numbers justify continuing at all.
