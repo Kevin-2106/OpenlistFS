@@ -18,6 +18,7 @@ import (
 
 	cfgpkg "openlistfs/internal/config"
 	"openlistfs/internal/openlist"
+	"openlistfs/internal/proxy"
 	"openlistfs/internal/vpath"
 )
 
@@ -31,12 +32,16 @@ Usage:
   openlistfs readtest <path>    HTTP Range benchmark against the direct link
                                 [--offset N] [--length N] [--stride N] [--count N]
   openlistfs mount O:           mount the read-only view at a drive letter (WinFsp)
+                                [--proxy none|system|http://host:port|socks5://host:port]
 
 Configuration (environment or .env, see .env.example):
 
   OPENLISTFS_URL                e.g. https://example.com
   OPENLISTFS_TOKEN              an API token, or
   OPENLISTFS_USERNAME / OPENLISTFS_PASSWORD
+  OPENLISTFS_PROXY              proxy for all traffic: "none" (default), "system",
+                                or a URL like http://127.0.0.1:7897 (mount's
+                                --proxy flag overrides)
 
 openlistfs is currently a read-only performance proof-of-concept.
 `
@@ -81,12 +86,9 @@ func newClient(ctx context.Context) (*openlist.Client, error) {
 }
 
 func buildClient(ctx context.Context, cfg cfgpkg.Config) (*openlist.Client, error) {
-	var opts []openlist.Option
-	if cfg.Token != "" {
-		opts = append(opts, openlist.WithToken(cfg.Token))
-	}
-	if cfg.Username != "" {
-		opts = append(opts, openlist.WithCredentials(cfg.Username, cfg.Password))
+	opts, err := clientOptions(cfg)
+	if err != nil {
+		return nil, err
 	}
 	c := openlist.New(cfg.URL, opts...)
 	if cfg.Token == "" && cfg.Username != "" {
@@ -97,17 +99,35 @@ func buildClient(ctx context.Context, cfg cfgpkg.Config) (*openlist.Client, erro
 	return c, nil
 }
 
-func cmdProbe(ctx context.Context) error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
+// clientOptions assembles the option set every client construction site
+// (buildClient, probe) shares — including OPENLISTFS_PROXY routing. An
+// invalid proxy setting is an error, never a silent direct fallback.
+func clientOptions(cfg cfgpkg.Config) ([]openlist.Option, error) {
 	var opts []openlist.Option
 	if cfg.Token != "" {
 		opts = append(opts, openlist.WithToken(cfg.Token))
 	}
 	if cfg.Username != "" {
 		opts = append(opts, openlist.WithCredentials(cfg.Username, cfg.Password))
+	}
+	if cfg.Proxy != "" {
+		fn, _, err := proxy.Parse(cfg.Proxy)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, openlist.WithTransport(openlist.NewTransport(fn)))
+	}
+	return opts, nil
+}
+
+func cmdProbe(ctx context.Context) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	opts, err := clientOptions(cfg)
+	if err != nil {
+		return err
 	}
 	c := openlist.New(cfg.URL, opts...)
 

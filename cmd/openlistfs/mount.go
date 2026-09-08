@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"openlistfs/internal/mounter"
+	"openlistfs/internal/proxy"
 )
 
 // cmdMount mounts the read-only OpenList view at a drive letter via WinFsp
@@ -33,12 +34,13 @@ func cmdMount(ctx context.Context, args []string) error {
 	concurrency := fs.Int("prefetch-concurrency", 3, "background fetch budget")
 	network := fs.Bool("network-mode", true, "mount as a network drive (RaiDrive-style; Explorer treats it as a remote share)")
 	writable := fs.Bool("writable", false, "enable write support (local spool, upload on close; needs server write permissions)")
+	proxySetting := fs.String("proxy", "", "proxy for all server traffic: \"none\", \"system\", or a URL like http://127.0.0.1:7897 / socks5://host:port (empty = OPENLISTFS_PROXY, then none)")
 	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
 	if drive == "" {
-		return fmt.Errorf("usage: openlistfs mount <drive> [--read-ahead N] [--chunk-size N] [--cache-size N] [--prefetch-concurrency N] [--network-mode=false] [--debug]\n   e.g. openlistfs mount O:")
+		return fmt.Errorf("usage: openlistfs mount <drive> [--read-ahead N] [--chunk-size N] [--cache-size N] [--prefetch-concurrency N] [--network-mode=false] [--writable] [--proxy none|system|URL] [--debug]\n   e.g. openlistfs mount O:")
 	}
 	mountpoint := drive
 
@@ -65,6 +67,9 @@ func cmdMount(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *proxySetting != "" {
+		cfg.Proxy = *proxySetting
+	}
 	session, err := mounter.Start(ctx, mounter.Config{
 		URL:         cfg.URL,
 		Token:       cfg.Token,
@@ -78,6 +83,7 @@ func cmdMount(ctx context.Context, args []string) error {
 		Concurrency: *concurrency,
 		MetaTTL:     *metaTTL,
 		Writable:    *writable,
+		Proxy:       cfg.Proxy,
 	})
 	if err != nil {
 		return err
@@ -89,6 +95,9 @@ func cmdMount(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("mounted %s — Ctrl+C to unmount\n", mountpoint)
 	fmt.Printf("server:     %s\n", cfg.URL)
+	if _, desc, err := proxy.Parse(cfg.Proxy); err == nil && desc != "direct" {
+		fmt.Printf("proxy:      %s\n", desc)
+	}
 	fmt.Printf("read-ahead: %s\n", mode)
 
 	session.WaitSignal()

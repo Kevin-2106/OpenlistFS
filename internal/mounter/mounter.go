@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"openlistfs/internal/filesystem"
 	"openlistfs/internal/openlist"
+	"openlistfs/internal/proxy"
 	"openlistfs/internal/rangeio"
 	"openlistfs/internal/readahead"
 	"openlistfs/internal/vpath"
@@ -35,7 +37,8 @@ type Config struct {
 	CacheSize   int64  // total RAM cache cap
 	Concurrency int    // background fetch budget
 	MetaTTL     time.Duration
-	Writable    bool // enable write support (mutations + overlay uploads)
+	Writable    bool   // enable write support (mutations + overlay uploads)
+	Proxy       string // "none" (default), "system", or a proxy URL — see internal/proxy
 }
 
 // Session is one live mount.
@@ -52,14 +55,18 @@ type Session struct {
 	unmounted bool
 }
 
-// buildClient mirrors the CLI's credential handling.
-func buildClient(ctx context.Context, cfg Config) (*openlist.Client, error) {
+// buildClient mirrors the CLI's credential handling. transport may be nil
+// (the client's default direct transport is used).
+func buildClient(ctx context.Context, cfg Config, transport http.RoundTripper) (*openlist.Client, error) {
 	var opts []openlist.Option
 	if cfg.Token != "" {
 		opts = append(opts, openlist.WithToken(cfg.Token))
 	}
 	if cfg.Username != "" {
 		opts = append(opts, openlist.WithCredentials(cfg.Username, cfg.Password))
+	}
+	if transport != nil {
+		opts = append(opts, openlist.WithTransport(transport))
 	}
 	c := openlist.New(cfg.URL, opts...)
 	if cfg.Token == "" && cfg.Username != "" {
@@ -90,13 +97,21 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	}
 
 	mctx, cancel := context.WithCancel(ctx)
-	c, err := buildClient(mctx, cfg)
+	proxyFn, proxyDesc, err := proxy.Parse(cfg.Proxy)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("mounter: %w", err)
+	}
+	// One proxy function, two tuned transports: API calls and direct-URL
+	// downloads each keep their own connection pool but share the route.
+	c, err := buildClient(mctx, cfg, openlist.NewTransport(proxyFn))
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	metrics := &rangeio.Metrics{}
-	src := c.Source(openlist.WithSourceMetrics(metrics), openlist.WithMetadataTTL(cfg.MetaTTL))
+	src := c.Source(openlist.WithSourceMetrics(metrics), openlist.WithMetadataTTL(cfg.MetaTTL),
+		openlist.WithSourceTransport(rangeio.NewTransport(proxyFn)))
 
 	var cache *readahead.Cache
 	if cfg.Window > 0 {
@@ -214,7 +229,8 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 
 	slog.Info("mounter: mounted", "drive", cfg.Mountpoint, "server", cfg.URL,
 		"read-ahead", fmtBytes(cfg.Window), "chunk", fmtBytes(cfg.ChunkSize),
-		"cache", fmtBytes(cfg.CacheSize), "workers", cfg.Concurrency, "network", cfg.Network)
+		"cache", fmtBytes(cfg.CacheSize), "workers", cfg.Concurrency, "network", cfg.Network,
+		"proxy", proxyDesc)
 
 	return &Session{
 		cfg:     cfg,

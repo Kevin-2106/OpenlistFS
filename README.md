@@ -19,6 +19,14 @@ by default**; an opt-in writable mode exists (see below).
   server depending on its configuration. Writes also become visible to
   re-opens only after OpenList's own metadata cache refreshes (~1 s).
 
+**Proxy support** (`--proxy` / GUI dropdown / `OPENLISTFS_PROXY`): all
+traffic to the server — JSON API calls **and** direct-URL file downloads —
+can go through `none` (default, direct), `system` (the Windows per-user
+system proxy from the WinINET registry, the one Clash/v2rayN set, falling
+back to `HTTP(S)_PROXY` env vars) or a specific URL
+(`http://127.0.0.1:7897`, `socks5://host:port`; a bare `host:port` means
+http). The setting is fixed per mount.
+
 **Still NOT SUPPORTED:** production use, crash consistency (uploads happen
 at close; a crash loses the pending changes), multi-writer coordination.
 
@@ -49,6 +57,7 @@ directory — see [.env.example](.env.example), never committed):
 | `OPENLISTFS_URL` | Base URL, e.g. `https://example.com` |
 | `OPENLISTFS_TOKEN` | An API token, **or** |
 | `OPENLISTFS_USERNAME` / `OPENLISTFS_PASSWORD` | Credentials; a token is obtained via `/api/auth/login` and refreshed automatically |
+| `OPENLISTFS_PROXY` | `none` (default) / `system` / a proxy URL — routes API calls **and** file downloads |
 
 Tokens and signed URLs are never logged; direct-link query strings are
 redacted in all diagnostics.
@@ -93,6 +102,7 @@ openlistfs mount O:       # mount the read-only view at a drive letter
 | `--prefetch-concurrency` | `3` | parallel prefetch fetches per file |
 | `--metadata-ttl` | `2m` | directory listing / stat / direct-link cache lifetime |
 | `--network-mode` | `true` | present the drive as a **network drive** (RaiDrive-style): Explorer uses its remote-share pipeline — lazy thumbnails, no timestamp writes, no eager scanning. `--network-mode=false` restores a fixed disk |
+| `--proxy` | `OPENLISTFS_PROXY`, else `none` | `none` / `system` / a proxy URL (`http://127.0.0.1:7897`, `socks5://host:port`) for all server traffic |
 | `--debug` | off | per-request trace on stderr |
 
 `mount` requires [WinFsp](https://winfsp.dev/). Press Ctrl+C to unmount

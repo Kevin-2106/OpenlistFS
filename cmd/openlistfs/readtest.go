@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"openlistfs/internal/openlist"
+	"openlistfs/internal/proxy"
 	"openlistfs/internal/rangeio"
 	"openlistfs/internal/vpath"
 )
@@ -83,7 +85,15 @@ func cmdReadtest(ctx context.Context, args []string) error {
 		*count, fmtBytes(readLen), fmtBytes(off), fmtBytes(step))
 
 	rLink := rangeio.Link{URL: link.URL, Header: link.Header, Size: entry.Size}
-	res := rangeio.ProbeRange(ctx, nil, rLink, off, readLen)
+	// OPENLISTFS_PROXY applies to the bare probe and the product path alike
+	// (newClient above already rejected invalid values).
+	var proxyClient *http.Client
+	if cfg, err := loadConfig(); err == nil && cfg.Proxy != "" {
+		if fn, _, perr := proxy.Parse(cfg.Proxy); perr == nil && fn != nil {
+			proxyClient = &http.Client{Transport: rangeio.NewTransport(fn)}
+		}
+	}
+	res := rangeio.ProbeRange(ctx, proxyClient, rLink, off, readLen)
 	if res.Err != nil {
 		return fmt.Errorf("probe: %v", res.Err)
 	}
@@ -92,14 +102,19 @@ func cmdReadtest(ctx context.Context, args []string) error {
 		fmtBytes(res.Received), res.Total.Round(time.Millisecond))
 
 	// Throughput via the product path.
-	reader := rangeio.New(ctx, rLink,
+	readerOpts := []rangeio.Option{
 		rangeio.WithLinkResolver(func(ctx context.Context) (rangeio.Link, error) {
 			fresh, err := c.ResolveLink(ctx, p)
 			if err != nil {
 				return rangeio.Link{}, err
 			}
 			return rangeio.Link{URL: fresh.URL, Header: fresh.Header, Size: entry.Size}, nil
-		}))
+		}),
+	}
+	if proxyClient != nil {
+		readerOpts = append(readerOpts, rangeio.WithHTTPClient(proxyClient))
+	}
+	reader := rangeio.New(ctx, rLink, readerOpts...)
 	defer reader.Close()
 
 	buf := make([]byte, readLen)

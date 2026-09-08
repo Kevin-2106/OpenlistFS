@@ -50,7 +50,28 @@ const opts = reactive({
   workers: 3,
   ttlMinutes: 2,
   writable: false,
+  proxyMode: 'none', // 'none' | 'system' | 'custom'
+  proxyUrl: '',
 })
+
+// The backend takes one combined string; the UI splits it for the dropdown.
+function proxySetting(): string {
+  return opts.proxyMode === 'custom' ? opts.proxyUrl.trim() : opts.proxyMode
+}
+
+function applyProxySetting(v: string) {
+  if (v === 'system') { opts.proxyMode = 'system'; opts.proxyUrl = '' }
+  else if (v && v !== 'none') { opts.proxyMode = 'custom'; opts.proxyUrl = v }
+  else { opts.proxyMode = 'none'; opts.proxyUrl = '' }
+}
+
+// Payload for Mount/SaveOptions: backend fields only.
+function mountPayload() {
+  const p: any = { ...opts, proxy: proxySetting() }
+  delete p.proxyMode
+  delete p.proxyUrl
+  return p
+}
 
 const status = reactive<Status>({
   mounted: false, mountpoint: '', server: '', error: '', uptimeSec: 0,
@@ -129,7 +150,7 @@ async function toggleAutoMount() {
 }
 
 async function saveOptions() {
-  const err = await wails().SaveOptions({ ...opts })
+  const err = await wails().SaveOptions(mountPayload())
   saveMsg.value = err || 'options saved ✓'
   if (!err) setTimeout(() => (saveMsg.value = ''), 2500)
 }
@@ -137,7 +158,7 @@ async function saveOptions() {
 async function doMount() {
   busy.value = true
   try {
-    const err = await wails().Mount({ ...opts })
+    const err = await wails().Mount(mountPayload())
     if (err) status.error = err
   } finally {
     busy.value = false
@@ -173,7 +194,7 @@ let timer: number | undefined
 onMounted(() => {
   loadProfiles()
   wails().GetOptions().then((o: any) => {
-    if (o && o.drive) Object.assign(opts, o)
+    if (o && o.drive) { Object.assign(opts, o); applyProxySetting(o.proxy || 'none') }
   })
   timer = window.setInterval(async () => {
     const s = await wails().GetStatus()
@@ -267,6 +288,20 @@ onUnmounted(() => window.clearInterval(timer))
     <div class="check">
       <input type="checkbox" id="wr" v-model="opts.writable" :disabled="mountedNow" />
       <label for="wr">Writable (needs server write permission; uploads on file close)</label>
+    </div>
+    <div class="row" style="align-items: end">
+      <div class="field" style="max-width: 180px">
+        <label>Proxy (API + downloads)</label>
+        <select v-model="opts.proxyMode" :disabled="mountedNow">
+          <option value="none">无代理 (direct)</option>
+          <option value="system">系统代理</option>
+          <option value="custom">自定义…</option>
+        </select>
+      </div>
+      <div class="field" v-if="opts.proxyMode === 'custom'" style="flex: 2">
+        <label>Proxy URL</label>
+        <input type="text" v-model="opts.proxyUrl" placeholder="http://127.0.0.1:7897 或 socks5://host:port" :disabled="mountedNow" />
+      </div>
     </div>
     <div class="row" style="margin-top: 14px; align-items: center">
       <button v-if="!mountedNow" @click="doMount" :disabled="busy">Mount</button>

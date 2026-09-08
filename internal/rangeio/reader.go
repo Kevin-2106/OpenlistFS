@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,17 +122,25 @@ func New(ctx context.Context, link Link, opts ...Option) *Reader {
 	return r
 }
 
-// sharedTransport is reused by every range reader so connections (and TLS
-// handshakes) are pooled across files: thumbnails, warmers and players all
-// open their own readers.
-var sharedTransport http.RoundTripper = &http.Transport{
-	MaxIdleConns:          32,
-	MaxIdleConnsPerHost:   32,
-	IdleConnTimeout:       90 * time.Second,
-	TLSHandshakeTimeout:   10 * time.Second,
-	ResponseHeaderTimeout: 30 * time.Second,
-	ExpectContinueTimeout: time.Second,
+// NewTransport returns the tuned range-reader transport; proxy (nil =
+// direct) routes downloads through the given proxy. Pass one shared
+// instance (via WithHTTPClient) to pool connections across readers.
+func NewTransport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
+	return &http.Transport{
+		Proxy:                 proxy,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
 }
+
+// sharedTransport is reused by every range reader that does not get an
+// explicit client, so connections (and TLS handshakes) are pooled across
+// files: thumbnails, warmers and players all open their own readers.
+var sharedTransport http.RoundTripper = NewTransport(nil)
 
 func defaultClient() *http.Client {
 	return &http.Client{Transport: sharedTransport}

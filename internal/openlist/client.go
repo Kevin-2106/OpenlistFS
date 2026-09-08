@@ -78,21 +78,34 @@ func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) { c.HTTP = hc }
 }
 
+// WithTransport overrides the HTTP transport, keeping the client timeout.
+// Pass NewTransport(proxyFn) to route API calls through a proxy.
+func WithTransport(rt http.RoundTripper) Option {
+	return func(c *Client) { c.HTTP.Transport = rt }
+}
+
+// NewTransport returns the tuned API transport; proxy (nil = direct)
+// routes every request through the given proxy.
+func NewTransport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
+	return &http.Transport{
+		Proxy:                 proxy,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+}
+
 // New creates a client for the server at baseURL.
 func New(baseURL string, opts ...Option) *Client {
 	c := &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		HTTP: &http.Client{
-			Timeout: 60 * time.Second,
-			Transport: &http.Transport{
-				ForceAttemptHTTP2:     true,
-				MaxIdleConns:          16,
-				MaxIdleConnsPerHost:   16,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 10 * time.Second,
-				ExpectContinueTimeout: time.Second,
-			},
+			Timeout:   60 * time.Second,
+			Transport: NewTransport(nil),
 		},
 	}
 	for _, opt := range opts {

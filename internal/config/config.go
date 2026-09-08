@@ -16,6 +16,7 @@ type Config struct {
 	Token    string `json:"token"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	Proxy    string `json:"proxy"` // "", "none", "system" or a proxy URL
 }
 
 // Load reads OPENLISTFS_* from the environment; a .env file in the working
@@ -28,6 +29,7 @@ func Load() (Config, error) {
 	cfg.Token = os.Getenv("OPENLISTFS_TOKEN")
 	cfg.Username = os.Getenv("OPENLISTFS_USERNAME")
 	cfg.Password = os.Getenv("OPENLISTFS_PASSWORD")
+	cfg.Proxy = os.Getenv("OPENLISTFS_PROXY")
 	if cfg.URL == "" {
 		missing = append(missing, "OPENLISTFS_URL")
 	}
@@ -51,6 +53,7 @@ func Save(cfg Config) error {
 	fmt.Fprintf(f, "OPENLISTFS_TOKEN=%s\n", cfg.Token)
 	fmt.Fprintf(f, "OPENLISTFS_USERNAME=%s\n", cfg.Username)
 	fmt.Fprintf(f, "OPENLISTFS_PASSWORD=%s\n", cfg.Password)
+	fmt.Fprintf(f, "OPENLISTFS_PROXY=%s\n", cfg.Proxy)
 	return nil
 }
 

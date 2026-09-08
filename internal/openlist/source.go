@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -17,8 +18,9 @@ import (
 
 // sourceConfig carries adapter options.
 type sourceConfig struct {
-	metrics *rangeio.Metrics
-	metaTTL time.Duration
+	metrics   *rangeio.Metrics
+	metaTTL   time.Duration
+	transport http.RoundTripper // shared by every range reader (proxying)
 }
 
 // SourceOption configures the filesystem Source returned by Source.
@@ -28,6 +30,13 @@ type SourceOption func(*sourceConfig)
 // creates, giving session-wide statistics.
 func WithSourceMetrics(m *rangeio.Metrics) SourceOption {
 	return func(cfg *sourceConfig) { cfg.metrics = m }
+}
+
+// WithSourceTransport makes every range reader the source creates share one
+// transport (connection pool) — pass rangeio.NewTransport(proxyFn) to route
+// direct-URL downloads through a proxy.
+func WithSourceTransport(rt http.RoundTripper) SourceOption {
+	return func(cfg *sourceConfig) { cfg.transport = rt }
 }
 
 // WithMetadataTTL sets how long List/Stat/link results are cached. Browsing
@@ -176,11 +185,7 @@ func (s *source) Open(ctx context.Context, p string) (filesystem.Entry, filesyst
 	if cf.entry.IsDir || cf.url == "" {
 		return toFSEntry(cf.entry), nil, nil
 	}
-	reader := rangeio.New(ctx, rangeio.Link{
-		URL:    cf.url,
-		Header: cf.head,
-		Size:   cf.entry.Size,
-	}, rangeio.WithLinkResolver(func(ctx context.Context) (rangeio.Link, error) {
+	ropts := append([]rangeio.Option{rangeio.WithLinkResolver(func(ctx context.Context) (rangeio.Link, error) {
 		// Expired link: bypass the cache, refresh it on success.
 		fresh, rawURL, header, err := s.client.fsGet(ctx, "link", p)
 		if err != nil {
@@ -191,12 +196,25 @@ func (s *source) Open(ctx context.Context, p string) (filesystem.Entry, filesyst
 		}
 		s.remember(p, fresh, rawURL, header)
 		return rangeio.Link{URL: rawURL, Header: header, Size: fresh.Size}, nil
-	}))
+	})}, sourceReaderOptions(s.cfg)...)
+	reader := rangeio.New(ctx, rangeio.Link{
+		URL:    cf.url,
+		Header: cf.head,
+		Size:   cf.entry.Size,
+	}, ropts...)
 	if s.cfg.metrics != nil {
 		// Replace the reader's private sink with the shared one.
 		reader.Metrics = s.cfg.metrics
 	}
 	return toFSEntry(cf.entry), reader, nil
+}
+
+// sourceReaderOptions wires the shared transport (if any) into a reader.
+func sourceReaderOptions(cfg sourceConfig) []rangeio.Option {
+	if cfg.transport == nil {
+		return nil
+	}
+	return []rangeio.Option{rangeio.WithHTTPClient(&http.Client{Transport: cfg.transport})}
 }
 
 // cachedFile returns the memoized fs/get result if present and fresh.
