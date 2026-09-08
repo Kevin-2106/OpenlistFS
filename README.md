@@ -27,6 +27,16 @@ back to `HTTP(S)_PROXY` env vars) or a specific URL
 (`http://127.0.0.1:7897`, `socks5://host:port`; a bare `host:port` means
 http). The setting is fixed per mount.
 
+**WebDAV backend** (`--webdav` / GUI dropdown, experimental): instead of
+the OpenList native API the mount can speak plain WebDAV — PROPFIND for
+metadata, authenticated GET + HTTP Range for content, MKCOL / DELETE /
+MOVE / PUT for the writable mode (a true streaming upload, unlike the
+native API's whole-file PUT). The same URL/username/password from `.env`
+is used; a server URL without a path gets `/dav` appended (OpenList's
+convention), a URL with a path is used as-is — so any WebDAV server
+(Nextcloud, 坚果云, …) works too. Token-only configurations cannot
+authenticate to WebDAV.
+
 **Still NOT SUPPORTED:** production use, crash consistency (uploads happen
 at close; a crash loses the pending changes), multi-writer coordination.
 
@@ -69,7 +79,8 @@ wails build            # requires Node/npm + Wails CLI (go install github.com/wa
 ./build/bin/openlistfs-gui.exe
 ```
 
-The GUI wraps the same mounter: pick a drive letter, press Mount. It
+The GUI wraps the same mounter: pick a drive letter, a backend (OpenList
+API or WebDAV) and a proxy mode, press Mount. It
 shows live session statistics (requests, TTFB, cache hit ratio, prefetch
 waste) polled from the running mount.
 
@@ -102,6 +113,7 @@ openlistfs mount O:       # mount the read-only view at a drive letter
 | `--prefetch-concurrency` | `3` | parallel prefetch fetches per file |
 | `--metadata-ttl` | `2m` | directory listing / stat / direct-link cache lifetime |
 | `--network-mode` | `true` | present the drive as a **network drive** (RaiDrive-style): Explorer uses its remote-share pipeline — lazy thumbnails, no timestamp writes, no eager scanning. `--network-mode=false` restores a fixed disk |
+| `--webdav` | off | speak WebDAV instead of the OpenList native API (`/dav` appended to a path-less server URL; uses username/password) |
 | `--proxy` | `OPENLISTFS_PROXY`, else `none` | `none` / `system` / a proxy URL (`http://127.0.0.1:7897`, `socks5://host:port`) for all server traffic |
 | `--debug` | off | per-request trace on stderr |
 
@@ -135,5 +147,9 @@ without the leading slash (`openlistfs ls Movies`).
 - GUI (user-approved scope expansion): Wails v2 + Vue 3 desktop app
   (mount/unmount, options, live session statistics) sharing the same
   `internal/mounter` core as the CLI.
+- Writable mode, proxy support (none/system/URL over both HTTP channels)
+  and an experimental WebDAV backend (`--webdav`) — see above. Live-verified
+  against the test server: WebDAV PROPFIND/GET-Range/PUT round-trips,
+  full-file hash parity between the two backends.
 - Phase 4 (never, by design): writes, GUI, disk cache, product polish —
   unless the Phase 3 numbers justify continuing at all.

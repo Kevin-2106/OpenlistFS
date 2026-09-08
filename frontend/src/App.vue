@@ -50,6 +50,7 @@ const opts = reactive({
   workers: 3,
   ttlMinutes: 2,
   writable: false,
+  backend: 'api', // 'api' (OpenList native) | 'webdav'
   proxyMode: 'none', // 'none' | 'system' | 'custom'
   proxyUrl: '',
 })
@@ -67,7 +68,7 @@ function applyProxySetting(v: string) {
 
 // Payload for Mount/SaveOptions: backend fields only.
 function mountPayload() {
-  const p: any = { ...opts, proxy: proxySetting() }
+  const p: any = { ...opts, proxy: proxySetting(), backend: opts.backend || 'api' }
   delete p.proxyMode
   delete p.proxyUrl
   return p
@@ -194,7 +195,11 @@ let timer: number | undefined
 onMounted(() => {
   loadProfiles()
   wails().GetOptions().then((o: any) => {
-    if (o && o.drive) { Object.assign(opts, o); applyProxySetting(o.proxy || 'none') }
+    if (o && o.drive) {
+      Object.assign(opts, o)
+      applyProxySetting(o.proxy || 'none')
+      opts.backend = o.backend || 'api'
+    }
   })
   timer = window.setInterval(async () => {
     const s = await wails().GetStatus()
@@ -290,6 +295,13 @@ onUnmounted(() => window.clearInterval(timer))
       <label for="wr">Writable (needs server write permission; uploads on file close)</label>
     </div>
     <div class="row" style="align-items: end">
+      <div class="field" style="max-width: 220px">
+        <label>Backend</label>
+        <select v-model="opts.backend" :disabled="mountedNow">
+          <option value="api">OpenList API</option>
+          <option value="webdav">WebDAV</option>
+        </select>
+      </div>
       <div class="field" style="max-width: 180px">
         <label>Proxy (API + downloads)</label>
         <select v-model="opts.proxyMode" :disabled="mountedNow">
@@ -303,6 +315,9 @@ onUnmounted(() => window.clearInterval(timer))
         <input type="text" v-model="opts.proxyUrl" placeholder="http://127.0.0.1:7897 或 socks5://host:port" :disabled="mountedNow" />
       </div>
     </div>
+    <p v-if="opts.backend === 'webdav'" class="sub" style="margin: 6px 0 0">
+      WebDAV 模式：使用 Username/Password（忽略 token）；服务器 URL 无路径时自动追加 /dav
+    </p>
     <div class="row" style="margin-top: 14px; align-items: center">
       <button v-if="!mountedNow" @click="doMount" :disabled="busy">Mount</button>
       <button v-else class="danger" @click="doUnmount" :disabled="busy">Unmount</button>

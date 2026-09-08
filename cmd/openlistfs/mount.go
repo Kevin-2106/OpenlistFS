@@ -34,6 +34,7 @@ func cmdMount(ctx context.Context, args []string) error {
 	concurrency := fs.Int("prefetch-concurrency", 3, "background fetch budget")
 	network := fs.Bool("network-mode", true, "mount as a network drive (RaiDrive-style; Explorer treats it as a remote share)")
 	writable := fs.Bool("writable", false, "enable write support (local spool, upload on close; needs server write permissions)")
+	webdavMode := fs.Bool("webdav", false, "speak WebDAV instead of the OpenList native API (server URL gets /dav appended when it has no path; uses username/password)")
 	proxySetting := fs.String("proxy", "", "proxy for all server traffic: \"none\", \"system\", or a URL like http://127.0.0.1:7897 / socks5://host:port (empty = OPENLISTFS_PROXY, then none)")
 	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
@@ -70,6 +71,10 @@ func cmdMount(ctx context.Context, args []string) error {
 	if *proxySetting != "" {
 		cfg.Proxy = *proxySetting
 	}
+	backend := ""
+	if *webdavMode {
+		backend = "webdav"
+	}
 	session, err := mounter.Start(ctx, mounter.Config{
 		URL:         cfg.URL,
 		Token:       cfg.Token,
@@ -84,6 +89,7 @@ func cmdMount(ctx context.Context, args []string) error {
 		MetaTTL:     *metaTTL,
 		Writable:    *writable,
 		Proxy:       cfg.Proxy,
+		Backend:     backend,
 	})
 	if err != nil {
 		return err
@@ -95,6 +101,9 @@ func cmdMount(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("mounted %s — Ctrl+C to unmount\n", mountpoint)
 	fmt.Printf("server:     %s\n", cfg.URL)
+	if *webdavMode {
+		fmt.Printf("backend:    webdav (/dav appended to the server URL when it has no path)\n")
+	}
 	if _, desc, err := proxy.Parse(cfg.Proxy); err == nil && desc != "direct" {
 		fmt.Printf("proxy:      %s\n", desc)
 	}

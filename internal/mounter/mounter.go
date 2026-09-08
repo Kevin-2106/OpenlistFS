@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"openlistfs/internal/rangeio"
 	"openlistfs/internal/readahead"
 	"openlistfs/internal/vpath"
+	"openlistfs/internal/webdav"
 )
 
 // Config is everything needed to bring up one mount.
@@ -39,12 +42,12 @@ type Config struct {
 	MetaTTL     time.Duration
 	Writable    bool   // enable write support (mutations + overlay uploads)
 	Proxy       string // "none" (default), "system", or a proxy URL — see internal/proxy
+	Backend     string // "api" (default, OpenList native) or "webdav"
 }
 
 // Session is one live mount.
 type Session struct {
 	cfg     Config
-	client  *openlist.Client
 	cache   *readahead.Cache
 	metrics *rangeio.Metrics
 
@@ -102,16 +105,33 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		cancel()
 		return nil, fmt.Errorf("mounter: %w", err)
 	}
-	// One proxy function, two tuned transports: API calls and direct-URL
-	// downloads each keep their own connection pool but share the route.
-	c, err := buildClient(mctx, cfg, openlist.NewTransport(proxyFn))
-	if err != nil {
-		cancel()
-		return nil, err
-	}
 	metrics := &rangeio.Metrics{}
-	src := c.Source(openlist.WithSourceMetrics(metrics), openlist.WithMetadataTTL(cfg.MetaTTL),
-		openlist.WithSourceTransport(rangeio.NewTransport(proxyFn)))
+	// One proxy function, two tuned transports: metadata calls and content
+	// downloads each keep their own connection pool but share the route.
+	rangeTransport := rangeio.NewTransport(proxyFn)
+
+	var src filesystem.Source
+	var backend string
+	switch cfg.Backend {
+	case "", "api":
+		backend = "api"
+		c, err := buildClient(mctx, cfg, openlist.NewTransport(proxyFn))
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		src = c.Source(openlist.WithSourceMetrics(metrics), openlist.WithMetadataTTL(cfg.MetaTTL),
+			openlist.WithSourceTransport(rangeTransport))
+	case "webdav":
+		backend = "webdav"
+		wc := webdav.New(davBaseURL(cfg.URL), cfg.Username, cfg.Password,
+			webdav.WithTransport(webdav.NewTransport(proxyFn)))
+		src = wc.Source(webdav.WithSourceMetrics(metrics), webdav.WithMetadataTTL(cfg.MetaTTL),
+			webdav.WithSourceTransport(rangeTransport))
+	default:
+		cancel()
+		return nil, fmt.Errorf("mounter: unknown backend %q (want api or webdav)", cfg.Backend)
+	}
 
 	var cache *readahead.Cache
 	if cfg.Window > 0 {
@@ -228,19 +248,32 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	}
 
 	slog.Info("mounter: mounted", "drive", cfg.Mountpoint, "server", cfg.URL,
-		"read-ahead", fmtBytes(cfg.Window), "chunk", fmtBytes(cfg.ChunkSize),
+		"backend", backend, "read-ahead", fmtBytes(cfg.Window), "chunk", fmtBytes(cfg.ChunkSize),
 		"cache", fmtBytes(cfg.CacheSize), "workers", cfg.Concurrency, "network", cfg.Network,
 		"proxy", proxyDesc)
 
 	return &Session{
 		cfg:     cfg,
-		client:  c,
 		cache:   cache,
 		metrics: metrics,
 		mounted: mounted,
 		cancel:  cancel,
 		started: time.Now(),
 	}, nil
+}
+
+// davBaseURL resolves the DAV collection for a webdav mount. An OpenList
+// server exposes WebDAV under /dav, so a bare server URL gets it appended;
+// a URL that already carries a path is used as-is (any WebDAV server).
+func davBaseURL(serverURL string) string {
+	u, err := url.Parse(strings.TrimSpace(serverURL))
+	if err != nil {
+		return serverURL
+	}
+	if u.Path == "" || u.Path == "/" {
+		return strings.TrimRight(serverURL, "/") + "/dav"
+	}
+	return strings.TrimRight(serverURL, "/")
 }
 
 func trimShare(mountpoint string) string {

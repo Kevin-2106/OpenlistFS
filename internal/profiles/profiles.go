@@ -34,7 +34,8 @@ type Options struct {
 	CacheMiB     int    `json:"cacheMiB"`
 	Workers      int    `json:"workers"`
 	TTLMinutes   int    `json:"ttlMinutes"`
-	Proxy        string `json:"proxy"` // "none", "system" or a proxy URL
+	Proxy        string `json:"proxy"`   // "none", "system" or a proxy URL
+	Backend      string `json:"backend"` // "api" (default) or "webdav"
 }
 
 // Document wraps the store with its mount options.

@@ -24,7 +24,8 @@ type MountOptions struct {
 	Workers      int    `json:"workers"`
 	TTLMinutes   int    `json:"ttlMinutes"`
 	Writable     bool   `json:"writable"`
-	Proxy        string `json:"proxy"` // "none", "system" or a proxy URL
+	Proxy        string `json:"proxy"`   // "none", "system" or a proxy URL
+	Backend      string `json:"backend"` // "api" (default) or "webdav"
 }
 
 // StatusView is what the UI polls once a second.
@@ -78,6 +79,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	if a.doc.Options.Proxy == "" {
 		a.doc.Options.Proxy = "none"
+	}
+	if a.doc.Options.Backend == "" {
+		a.doc.Options.Backend = "api"
 	}
 	a.opts = fromStoreOptions(a.doc.Options)
 
@@ -278,6 +282,7 @@ func (a *App) Mount(opts MountOptions) string {
 		MetaTTL:     time.Duration(opts.TTLMinutes) * time.Minute,
 		Writable:    opts.Writable,
 		Proxy:       opts.Proxy,
+		Backend:     opts.Backend,
 	})
 	if err != nil {
 		a.setErr(err.Error())
@@ -299,7 +304,7 @@ func toStoreOptions(o MountOptions) profiles.Options {
 		Drive: o.Drive, Network: o.Network,
 		ReadAheadMiB: o.ReadAheadMiB, ChunkKiB: o.ChunkKiB,
 		CacheMiB: o.CacheMiB, Workers: o.Workers, TTLMinutes: o.TTLMinutes,
-		Proxy: o.Proxy,
+		Proxy: o.Proxy, Backend: o.Backend,
 	}
 }
 
@@ -308,7 +313,7 @@ func fromStoreOptions(o profiles.Options) MountOptions {
 		Drive: o.Drive, Network: o.Network,
 		ReadAheadMiB: o.ReadAheadMiB, ChunkKiB: o.ChunkKiB,
 		CacheMiB: o.CacheMiB, Workers: o.Workers, TTLMinutes: o.TTLMinutes,
-		Proxy: o.Proxy,
+		Proxy: o.Proxy, Backend: o.Backend,
 	}
 }
 
