@@ -74,16 +74,16 @@ function mountPayload() {
   return p
 }
 
-const status = reactive<Status>({
-  mounted: false, mountpoint: '', server: '', error: '', uptimeSec: 0,
-  readAtCalls: 0, httpReqs: 0, retries: 0, bytesFetched: 0, avgTtfbMs: 0,
-  hitBytes: 0, missBytes: 0, hitRatio: 0, ramInUse: 0,
-  prefetchBytes: 0, prefetchWaste: 0, seekCancels: 0,
-})
+const st = reactive<{ error: string; sessions: Status[] }>({ error: '', sessions: [] })
+
+// A drive letter is busy while one of the live sessions owns it.
+function mountedOn(drive: string): boolean {
+  const k = (drive || '').trim().toUpperCase()
+  return !!k && st.sessions.some(s => (s.mountpoint || '').trim().toUpperCase() === k)
+}
 
 const busy = ref(false)
 const saveMsg = ref('')
-const mountedNow = ref(false)
 
 async function loadProfiles() {
   const p = await wails().GetProfiles()
@@ -114,7 +114,7 @@ async function loadProfile(name: string) {
 async function switchProfile() {
   if (!profilesUi.active) return
   const err = await wails().SetActiveProfile(profilesUi.active)
-  if (err) { status.error = err; return }
+  if (err) { st.error = err; return }
   await loadProfile(profilesUi.active)
 }
 
@@ -133,7 +133,7 @@ async function saveProfile() {
 async function deleteProfile() {
   if (!profilesUi.active) return
   const err = await wails().DeleteProfile(profilesUi.active)
-  if (err) { status.error = err; return }
+  if (err) { st.error = err; return }
   profilesUi.newProfileName = ''
   await loadProfiles()
 }
@@ -141,13 +141,13 @@ async function deleteProfile() {
 async function toggleAutostart() {
   profilesUi.autostart = !profilesUi.autostart
   const err = await wails().SetAutostart(profilesUi.autostart)
-  if (err) { profilesUi.autostart = !profilesUi.autostart; status.error = err }
+  if (err) { profilesUi.autostart = !profilesUi.autostart; st.error = err }
 }
 
 async function toggleAutoMount() {
   profilesUi.autoMount = !profilesUi.autoMount
   const err = await wails().SetAutoMount(profilesUi.autoMount)
-  if (err) { profilesUi.autoMount = !profilesUi.autoMount; status.error = err }
+  if (err) { profilesUi.autoMount = !profilesUi.autoMount; st.error = err }
 }
 
 async function saveOptions() {
@@ -160,16 +160,17 @@ async function doMount() {
   busy.value = true
   try {
     const err = await wails().Mount(mountPayload())
-    if (err) status.error = err
+    if (err) st.error = err
   } finally {
     busy.value = false
   }
 }
 
-async function doUnmount() {
+async function doUnmount(drive: string) {
   busy.value = true
   try {
-    await wails().Unmount()
+    const err = await wails().Unmount(drive)
+    if (err) st.error = err
   } finally {
     busy.value = false
   }
@@ -202,9 +203,9 @@ onMounted(() => {
     }
   })
   timer = window.setInterval(async () => {
-    const s = await wails().GetStatus()
-    Object.assign(status, s)
-    mountedNow.value = s.mounted
+    const s = await wails().GetStatuses()
+    st.error = s.error || ''
+    st.sessions = s.sessions || []
   }, 1000)
 })
 onUnmounted(() => window.clearInterval(timer))
@@ -214,7 +215,7 @@ onUnmounted(() => window.clearInterval(timer))
   <h1>OpenListFS</h1>
   <p class="sub">read-only OpenList filesystem client · performance PoC · WinFsp</p>
 
-  <div v-if="status.error" class="error">{{ status.error }}</div>
+  <div v-if="st.error" class="error">{{ st.error }}</div>
 
   <div class="card">
     <h2>Server</h2>
@@ -267,37 +268,37 @@ onUnmounted(() => window.clearInterval(timer))
     <div class="row">
       <div class="field" style="max-width: 120px">
         <label>Drive letter</label>
-        <input type="text" v-model="opts.drive" :disabled="mountedNow" />
+        <input type="text" v-model="opts.drive" :disabled="mountedOn(opts.drive)" />
       </div>
       <div class="field" style="max-width: 140px">
         <label>Read-ahead (MiB, 0 = off)</label>
-        <input type="number" v-model.number="opts.readAheadMiB" min="0" :disabled="mountedNow" />
+        <input type="number" v-model.number="opts.readAheadMiB" min="0" :disabled="mountedOn(opts.drive)" />
       </div>
       <div class="field" style="max-width: 140px">
         <label>Chunk (KiB)</label>
-        <input type="number" v-model.number="opts.chunkKiB" min="64" :disabled="mountedNow" />
+        <input type="number" v-model.number="opts.chunkKiB" min="64" :disabled="mountedOn(opts.drive)" />
       </div>
       <div class="field" style="max-width: 140px">
         <label>Cache (MiB)</label>
-        <input type="number" v-model.number="opts.cacheMiB" min="16" :disabled="mountedNow" />
+        <input type="number" v-model.number="opts.cacheMiB" min="16" :disabled="mountedOn(opts.drive)" />
       </div>
       <div class="field" style="max-width: 120px">
         <label>Workers</label>
-        <input type="number" v-model.number="opts.workers" min="1" max="8" :disabled="mountedNow" />
+        <input type="number" v-model.number="opts.workers" min="1" max="8" :disabled="mountedOn(opts.drive)" />
       </div>
     </div>
     <div class="check">
-      <input type="checkbox" id="nw" v-model="opts.network" :disabled="mountedNow" />
+      <input type="checkbox" id="nw" v-model="opts.network" :disabled="mountedOn(opts.drive)" />
       <label for="nw">Network drive mode (recommended — Explorer remote-share pipeline)</label>
     </div>
     <div class="check">
-      <input type="checkbox" id="wr" v-model="opts.writable" :disabled="mountedNow" />
+      <input type="checkbox" id="wr" v-model="opts.writable" :disabled="mountedOn(opts.drive)" />
       <label for="wr">Writable (needs server write permission; uploads on file close)</label>
     </div>
     <div class="row" style="align-items: end">
       <div class="field" style="max-width: 220px">
         <label>Backend</label>
-        <select v-model="opts.backend" :disabled="mountedNow">
+        <select v-model="opts.backend" :disabled="mountedOn(opts.drive)">
           <option value="api">OpenList API</option>
           <option value="webdav">WebDAV</option>
           <option value="s3">S3</option>
@@ -305,7 +306,7 @@ onUnmounted(() => window.clearInterval(timer))
       </div>
       <div class="field" style="max-width: 180px">
         <label>Proxy (API + downloads)</label>
-        <select v-model="opts.proxyMode" :disabled="mountedNow">
+        <select v-model="opts.proxyMode" :disabled="mountedOn(opts.drive)">
           <option value="none">无代理 (direct)</option>
           <option value="system">系统代理</option>
           <option value="custom">自定义…</option>
@@ -313,7 +314,7 @@ onUnmounted(() => window.clearInterval(timer))
       </div>
       <div class="field" v-if="opts.proxyMode === 'custom'" style="flex: 2">
         <label>Proxy URL</label>
-        <input type="text" v-model="opts.proxyUrl" placeholder="http://127.0.0.1:7897 或 socks5://host:port" :disabled="mountedNow" />
+        <input type="text" v-model="opts.proxyUrl" placeholder="http://127.0.0.1:7897 或 socks5://host:port" :disabled="mountedOn(opts.drive)" />
       </div>
     </div>
     <p v-if="opts.backend === 'webdav'" class="sub" style="margin: 6px 0 0">
@@ -324,28 +325,35 @@ onUnmounted(() => window.clearInterval(timer))
       Username/Password 填 Access Key / Secret Key（留空 = 匿名只读）；区域默认 us-east-1，可用 URL 后加 ?region= 覆盖
     </p>
     <div class="row" style="margin-top: 14px; align-items: center">
-      <button v-if="!mountedNow" @click="doMount" :disabled="busy">Mount</button>
-      <button v-else class="danger" @click="doUnmount" :disabled="busy">Unmount</button>
-      <button class="secondary" @click="saveOptions" :disabled="mountedNow">Save options</button>
-      <span class="badge" :class="mountedNow ? 'on' : 'off'">
-        {{ mountedNow ? `MOUNTED ${status.mountpoint}` : 'NOT MOUNTED' }}
+      <button v-if="!mountedOn(opts.drive)" @click="doMount" :disabled="busy">Mount</button>
+      <button v-else class="danger" @click="doUnmount(opts.drive)" :disabled="busy">Unmount {{ opts.drive }}</button>
+      <button class="secondary" @click="saveOptions" :disabled="mountedOn(opts.drive)">Save options</button>
+      <span class="badge" :class="st.sessions.length ? 'on' : 'off'">
+        {{ st.sessions.length === 0 ? 'NOT MOUNTED' : st.sessions.length === 1 ? `MOUNTED ${st.sessions[0].mountpoint}` : `MOUNTED ×${st.sessions.length}` }}
       </span>
-      <span v-if="mountedNow" class="msg">up {{ fmtUptime(status.uptimeSec) }} · {{ status.server }}</span>
     </div>
   </div>
 
-  <div class="card" v-if="mountedNow">
-    <h2>Session statistics</h2>
+  <div class="card" v-for="s in st.sessions" :key="s.mountpoint">
+    <div class="row" style="align-items: center; margin-bottom: 12px">
+      <h2 style="margin: 0">Session — {{ s.mountpoint }}</h2>
+      <span class="sub" style="margin: 0">
+        {{ s.server }}{{ s.profile ? ` · ${s.profile}` : '' }} · up {{ fmtUptime(s.uptimeSec) }}
+      </span>
+      <button class="danger" style="margin-left: auto; padding: 5px 14px" @click="doUnmount(s.mountpoint)" :disabled="busy">
+        Unmount
+      </button>
+    </div>
     <div class="stats">
-      <div class="stat"><div class="k">ReadAt calls</div><div class="v">{{ status.readAtCalls }}</div></div>
-      <div class="stat"><div class="k">HTTP requests</div><div class="v">{{ status.httpReqs }} <small style="color:#7c8698">(+{{ status.retries }} retry)</small></div></div>
-      <div class="stat"><div class="k">Downloaded</div><div class="v">{{ fmtBytes(status.bytesFetched) }}</div></div>
-      <div class="stat"><div class="k">Avg TTFB</div><div class="v">{{ status.avgTtfbMs.toFixed(0) }} ms</div></div>
-      <div class="stat"><div class="k">Cache hit</div><div class="v">{{ status.hitRatio.toFixed(1) }}%</div></div>
-      <div class="stat"><div class="k">Cache RAM</div><div class="v">{{ fmtBytes(status.ramInUse) }}</div></div>
-      <div class="stat"><div class="k">Prefetch</div><div class="v">{{ fmtBytes(status.prefetchBytes) }}</div></div>
-      <div class="stat"><div class="k">Prefetch waste</div><div class="v">{{ fmtBytes(status.prefetchWaste) }}</div></div>
-      <div class="stat"><div class="k">Seek cancels</div><div class="v">{{ status.seekCancels }}</div></div>
+      <div class="stat"><div class="k">ReadAt calls</div><div class="v">{{ s.readAtCalls }}</div></div>
+      <div class="stat"><div class="k">HTTP requests</div><div class="v">{{ s.httpReqs }} <small style="color:#7c8698">(+{{ s.retries }} retry)</small></div></div>
+      <div class="stat"><div class="k">Downloaded</div><div class="v">{{ fmtBytes(s.bytesFetched) }}</div></div>
+      <div class="stat"><div class="k">Avg TTFB</div><div class="v">{{ s.avgTtfbMs.toFixed(0) }} ms</div></div>
+      <div class="stat"><div class="k">Cache hit</div><div class="v">{{ s.hitRatio.toFixed(1) }}%</div></div>
+      <div class="stat"><div class="k">Cache RAM</div><div class="v">{{ fmtBytes(s.ramInUse) }}</div></div>
+      <div class="stat"><div class="k">Prefetch</div><div class="v">{{ fmtBytes(s.prefetchBytes) }}</div></div>
+      <div class="stat"><div class="k">Prefetch waste</div><div class="v">{{ fmtBytes(s.prefetchWaste) }}</div></div>
+      <div class="stat"><div class="k">Seek cancels</div><div class="v">{{ s.seekCancels }}</div></div>
     </div>
   </div>
 </template>

@@ -93,13 +93,19 @@ wails build            # requires Node/npm + Wails CLI (go install github.com/wa
 ```
 
 The GUI wraps the same mounter: pick a drive letter, a backend (OpenList
-API or WebDAV) and a proxy mode, press Mount. It
-shows live session statistics (requests, TTFB, cache hit ratio, prefetch
-waste) polled from the running mount.
+API, WebDAV or S3) and a proxy mode, press Mount. It shows live session
+statistics (requests, TTFB, cache hit ratio, prefetch waste) polled from
+each running mount.
 
 Features beyond the CLI:
+- **Multiple simultaneous mounts**: one session per drive letter — change
+  the letter (and/or the active profile) and press Mount again to add
+  another drive; each keeps its own cache and statistics card with its
+  own Unmount. (The CLI mounts one drive per process — run several
+  processes for several drives.)
 - **System tray**: closing the window hides to tray; tray menu has
-  show/mount-unmount/quit (quit unmounts first).
+  show, mount/unmount of the configured drive, unmount-all and quit
+  (quit unmounts everything first).
 - **Multiple profiles**: save several server configurations
   (`profiles.json` next to the exe — plain-text passwords, never commit
   it); the active profile is synced to `.env` for the CLI.

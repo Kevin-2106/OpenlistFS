@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,14 +58,27 @@ type StatusView struct {
 type App struct {
 	ctx context.Context
 
-	mu      sync.Mutex
-	session *mounter.Session
-	err     string
-	doc     profiles.Document
-	opts    MountOptions
+	mu       sync.Mutex
+	sessions map[string]*mountEntry // one per drive letter (key: driveKey)
+	err      string
+	doc      profiles.Document
+	opts     MountOptions
 }
 
-func NewApp() *App { return &App{} }
+// mountEntry is one live mount plus the profile it came from.
+type mountEntry struct {
+	session *mounter.Session
+	profile string
+}
+
+func NewApp() *App {
+	return &App{sessions: make(map[string]*mountEntry)}
+}
+
+// driveKey normalizes a drive letter into the session map key ("o: " → "O:").
+func driveKey(drive string) string {
+	return strings.ToUpper(strings.TrimSpace(drive))
+}
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
@@ -242,22 +257,30 @@ func (a *App) SetAutostart(enable bool) string {
 
 // ---- mount ----
 
-// Mount brings up the drive with the active profile (or the legacy env
-// configuration when no profiles exist). Returns an error message or "".
+// Mount brings up one more drive with the active profile (or the legacy
+// env configuration when no profiles exist). Sessions are per drive
+// letter: mounting at a fresh letter adds another drive alongside the
+// running ones. Returns an error message or "".
 func (a *App) Mount(opts MountOptions) string {
+	key := driveKey(opts.Drive)
+	if key == "" {
+		return "drive letter is empty"
+	}
 	a.mu.Lock()
-	if a.session != nil {
+	if _, busy := a.sessions[key]; busy {
 		a.mu.Unlock()
-		return "already mounted"
+		return key + " is already mounted"
 	}
 	profile, hasProfile := a.doc.ActiveProfile()
 	a.opts = opts
 	a.mu.Unlock()
 
 	var url, token, username, password string
+	profileName := ""
 	if hasProfile {
 		url, token = profile.URL, profile.Token
 		username, password = profile.Username, profile.Password
+		profileName = a.doc.Active
 	} else {
 		c, err := cfgpkg.Load()
 		if err != nil {
@@ -289,9 +312,13 @@ func (a *App) Mount(opts MountOptions) string {
 		return err.Error()
 	}
 	a.mu.Lock()
-	a.session = s
+	if _, busy := a.sessions[key]; busy { // lost a race with another Mount
+		a.mu.Unlock()
+		s.Unmount()
+		return key + " is already mounted"
+	}
+	a.sessions[key] = &mountEntry{session: s, profile: profileName}
 	a.err = ""
-	profileName := a.doc.Active
 	a.mu.Unlock()
 
 	go a.saveOptionsQuietly(opts)
@@ -335,33 +362,61 @@ func (a *App) syncActiveToEnv(name string) {
 	_ = cfgpkg.Save(cfgpkg.Config{URL: p.URL, Token: p.Token, Username: p.Username, Password: p.Password})
 }
 
-// Unmount tears the drive down. Returns an error message or "".
-func (a *App) Unmount() string {
+// Unmount tears down the drive mounted at mountpoint. Returns an error
+// message or "".
+func (a *App) Unmount(mountpoint string) string {
+	key := driveKey(mountpoint)
 	a.mu.Lock()
-	s := a.session
-	a.session = nil
+	me := a.sessions[key]
+	delete(a.sessions, key)
 	a.mu.Unlock()
-	if s == nil {
-		return ""
+	if me != nil {
+		me.session.Unmount()
 	}
-	s.Unmount()
 	return ""
 }
 
-// GetStatus polls the live session and counters.
-func (a *App) GetStatus() StatusView {
+// UnmountAll tears down every mounted drive (tray quit, beforeClose is
+// hide-only so it is not used there).
+func (a *App) UnmountAll() {
 	a.mu.Lock()
-	s := a.session
-	lastErr := a.err
-	profile := a.doc.Active
+	entries := make([]*mountEntry, 0, len(a.sessions))
+	for _, me := range a.sessions {
+		entries = append(entries, me)
+	}
+	a.sessions = make(map[string]*mountEntry)
 	a.mu.Unlock()
-	v := StatusView{Error: lastErr, Profile: profile}
-	if s != nil {
-		st := s.Stats()
-		v.Mounted = st.Mounted
-		v.Mountpoint = st.Mountpoint
-		v.Server = st.Server
-		v.UptimeSec = st.UptimeSec
+	for _, me := range entries {
+		me.session.Unmount()
+	}
+}
+
+// StatusesView is what the UI polls once a second: the last mount error
+// plus one StatusView per mounted drive.
+type StatusesView struct {
+	Error    string       `json:"error"`
+	Sessions []StatusView `json:"sessions"`
+}
+
+// GetStatuses polls every live session and their counters.
+func (a *App) GetStatuses() StatusesView {
+	a.mu.Lock()
+	lastErr := a.err
+	entries := make([]*mountEntry, 0, len(a.sessions))
+	for _, me := range a.sessions {
+		entries = append(entries, me)
+	}
+	a.mu.Unlock()
+	out := StatusesView{Error: lastErr, Sessions: []StatusView{}}
+	for _, me := range entries {
+		st := me.session.Stats()
+		v := StatusView{
+			Mounted:    st.Mounted,
+			Mountpoint: st.Mountpoint,
+			Server:     st.Server,
+			Profile:    me.profile,
+			UptimeSec:  st.UptimeSec,
+		}
 		v.ReadAtCalls = st.ReadAtCalls
 		v.HTTPReqs = st.HTTPReqs
 		v.Retries = st.Retries
@@ -374,8 +429,12 @@ func (a *App) GetStatus() StatusView {
 		v.PrefetchBytes = st.PrefetchBytes
 		v.PrefetchWaste = st.PrefetchWaste
 		v.SeekCancels = st.SeekCancels
+		out.Sessions = append(out.Sessions, v)
 	}
-	return v
+	sort.Slice(out.Sessions, func(i, j int) bool {
+		return out.Sessions[i].Mountpoint < out.Sessions[j].Mountpoint
+	})
+	return out
 }
 
 func (a *App) setErr(msg string) {
@@ -400,45 +459,68 @@ func (a *App) onTrayReady() {
 	systray.SetTooltip("OpenListFS (read-only PoC)")
 
 	mShow := systray.AddMenuItem("显示窗口", "Show the OpenListFS window")
-	mToggle := systray.AddMenuItem("挂载", "Mount / Unmount the drive")
+	mToggle := systray.AddMenuItem("挂载", "Mount / unmount the configured drive")
+	mAll := systray.AddMenuItem("卸载全部", "Unmount every drive")
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("退出 (先卸载)", "Unmount and quit")
+	mQuit := systray.AddMenuItem("退出 (先卸载)", "Unmount all and quit")
 
 	mShow.Click(func() { runtime.WindowShow(a.ctx) })
-	mToggle.Click(func() {
-		a.mu.Lock()
-		mounted := a.session != nil
-		a.mu.Unlock()
-		if mounted {
-			a.Unmount()
-		} else if msg := a.Mount(a.currentOptions()); msg != "" {
-			runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-				Type:    runtime.ErrorDialog,
-				Title:   "Mount failed",
-				Message: msg,
-				Buttons: []string{"OK"},
-			})
-		}
-	})
+	mToggle.Click(a.trayToggle)
+	mAll.Click(func() { a.UnmountAll() })
 	mQuit.Click(func() {
-		a.Unmount()
+		a.UnmountAll()
 		systray.Quit()
 	})
 
-	// Keep the toggle label in sync with the session.
+	// Keep the toggle label in sync with the configured drive's session.
 	go func() {
 		for {
 			time.Sleep(time.Second)
 			a.mu.Lock()
-			mounted := a.session != nil
+			key := driveKey(a.opts.Drive)
+			_, mounted := a.sessions[key]
+			count := len(a.sessions)
 			a.mu.Unlock()
-			if mounted {
-				mToggle.SetTitle("卸载")
-			} else {
+			switch {
+			case count == 0:
 				mToggle.SetTitle("挂载")
+			case mounted:
+				mToggle.SetTitle("卸载 " + key)
+			default:
+				mToggle.SetTitle("挂载 " + key)
 			}
 		}
 	}()
+}
+
+// trayToggle mounts or unmounts the drive the current options point at.
+func (a *App) trayToggle() {
+	a.mu.Lock()
+	key := driveKey(a.opts.Drive)
+	_, mounted := a.sessions[key]
+	opts := a.opts
+	a.mu.Unlock()
+	if key == "" {
+		runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+			Type:    runtime.ErrorDialog,
+			Title:   "Mount failed",
+			Message: "no drive letter configured",
+			Buttons: []string{"OK"},
+		})
+		return
+	}
+	if mounted {
+		a.Unmount(key)
+		return
+	}
+	if msg := a.Mount(opts); msg != "" {
+		runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+			Type:    runtime.ErrorDialog,
+			Title:   "Mount failed",
+			Message: msg,
+			Buttons: []string{"OK"},
+		})
+	}
 }
 
 func (a *App) currentOptions() MountOptions {
