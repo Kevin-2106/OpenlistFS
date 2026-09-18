@@ -37,6 +37,19 @@ convention), a URL with a path is used as-is — so any WebDAV server
 (Nextcloud, 坚果云, …) works too. Token-only configurations cannot
 authenticate to WebDAV.
 
+**S3 backend** (`--s3` / GUI dropdown, experimental): mount one bucket of
+any S3-compatible store (AWS S3, MinIO, Cloudflare R2, …). The server URL
+carries endpoint and bucket — `https://s3.us-west-2.amazonaws.com/mybucket`
+or `http://127.0.0.1:9000/media`; username/password are the access key /
+secret key (empty = anonymous read-only). The region defaults to
+`us-east-1`, is inferred from `s3.<region>.amazonaws.com` hosts, and can
+be forced with `?region=` on the URL. Metadata comes from
+ListObjectsV2/HEAD, content from presigned GETs + HTTP Range, and the
+writable mode maps to PUT/DELETE/server-side COPY (renaming directories
+is rejected — S3 has no prefix rename). SigV4 is implemented in-package
+(no AWS SDK dependency) and the signer is validated against the worked
+example in the AWS documentation.
+
 **Still NOT SUPPORTED:** production use, crash consistency (uploads happen
 at close; a crash loses the pending changes), multi-writer coordination.
 
@@ -114,6 +127,7 @@ openlistfs mount O:       # mount the read-only view at a drive letter
 | `--metadata-ttl` | `2m` | directory listing / stat / direct-link cache lifetime |
 | `--network-mode` | `true` | present the drive as a **network drive** (RaiDrive-style): Explorer uses its remote-share pipeline — lazy thumbnails, no timestamp writes, no eager scanning. `--network-mode=false` restores a fixed disk |
 | `--webdav` | off | speak WebDAV instead of the OpenList native API (`/dav` appended to a path-less server URL; uses username/password) |
+| `--s3` | off | mount one S3 bucket instead of the OpenList native API (server URL = `https://endpoint/bucket`; username/password = access key/secret; region default `us-east-1`, override with `?region=`) |
 | `--proxy` | `OPENLISTFS_PROXY`, else `none` | `none` / `system` / a proxy URL (`http://127.0.0.1:7897`, `socks5://host:port`) for all server traffic |
 | `--debug` | off | per-request trace on stderr |
 
@@ -151,5 +165,10 @@ without the leading slash (`openlistfs ls Movies`).
   and an experimental WebDAV backend (`--webdav`) — see above. Live-verified
   against the test server: WebDAV PROPFIND/GET-Range/PUT round-trips,
   full-file hash parity between the two backends.
+- Experimental S3 backend (`--s3`): in-package SigV4 (validated against
+  the AWS documentation's signing example), verified against an in-test
+  fake S3 (listing/pagination, unicode and reserved-character keys,
+  presigned ranged GET, PUT/COPY/DELETE round-trips, auth rejection);
+  not yet live-verified against a real provider.
 - Phase 4 (never, by design): writes, GUI, disk cache, product polish —
   unless the Phase 3 numbers justify continuing at all.

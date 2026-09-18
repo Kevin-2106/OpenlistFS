@@ -50,7 +50,7 @@ const opts = reactive({
   workers: 3,
   ttlMinutes: 2,
   writable: false,
-  backend: 'api', // 'api' (OpenList native) | 'webdav'
+  backend: 'api', // 'api' (OpenList native) | 'webdav' | 's3'
   proxyMode: 'none', // 'none' | 'system' | 'custom'
   proxyUrl: '',
 })
@@ -300,6 +300,7 @@ onUnmounted(() => window.clearInterval(timer))
         <select v-model="opts.backend" :disabled="mountedNow">
           <option value="api">OpenList API</option>
           <option value="webdav">WebDAV</option>
+          <option value="s3">S3</option>
         </select>
       </div>
       <div class="field" style="max-width: 180px">
@@ -317,6 +318,10 @@ onUnmounted(() => window.clearInterval(timer))
     </div>
     <p v-if="opts.backend === 'webdav'" class="sub" style="margin: 6px 0 0">
       WebDAV 模式：使用 Username/Password（忽略 token）；服务器 URL 无路径时自动追加 /dav
+    </p>
+    <p v-if="opts.backend === 's3'" class="sub" style="margin: 6px 0 0">
+      S3 模式：URL 填 https://端点/存储桶（如 https://s3.us-west-2.amazonaws.com/bucket 或 http://127.0.0.1:9000/media）；
+      Username/Password 填 Access Key / Secret Key（留空 = 匿名只读）；区域默认 us-east-1，可用 URL 后加 ?region= 覆盖
     </p>
     <div class="row" style="margin-top: 14px; align-items: center">
       <button v-if="!mountedNow" @click="doMount" :disabled="busy">Mount</button>

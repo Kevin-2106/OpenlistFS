@@ -23,6 +23,7 @@ import (
 	"openlistfs/internal/proxy"
 	"openlistfs/internal/rangeio"
 	"openlistfs/internal/readahead"
+	"openlistfs/internal/s3"
 	"openlistfs/internal/vpath"
 	"openlistfs/internal/webdav"
 )
@@ -42,7 +43,7 @@ type Config struct {
 	MetaTTL     time.Duration
 	Writable    bool   // enable write support (mutations + overlay uploads)
 	Proxy       string // "none" (default), "system", or a proxy URL — see internal/proxy
-	Backend     string // "api" (default, OpenList native) or "webdav"
+	Backend     string // "api" (default, OpenList native), "webdav" or "s3"
 }
 
 // Session is one live mount.
@@ -128,9 +129,20 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 			webdav.WithTransport(webdav.NewTransport(proxyFn)))
 		src = wc.Source(webdav.WithSourceMetrics(metrics), webdav.WithMetadataTTL(cfg.MetaTTL),
 			webdav.WithSourceTransport(rangeTransport))
+	case "s3":
+		backend = "s3"
+		endpoint, bucket, region, err := s3.ParseTarget(cfg.URL)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("mounter: %w", err)
+		}
+		sc := s3.New(endpoint, bucket, region, cfg.Username, cfg.Password,
+			s3.WithTransport(s3.NewTransport(proxyFn)))
+		src = sc.Source(s3.WithSourceMetrics(metrics), s3.WithMetadataTTL(cfg.MetaTTL),
+			s3.WithSourceTransport(rangeTransport))
 	default:
 		cancel()
-		return nil, fmt.Errorf("mounter: unknown backend %q (want api or webdav)", cfg.Backend)
+		return nil, fmt.Errorf("mounter: unknown backend %q (want api, webdav or s3)", cfg.Backend)
 	}
 
 	var cache *readahead.Cache

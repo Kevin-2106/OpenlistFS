@@ -25,7 +25,7 @@ type MountOptions struct {
 	TTLMinutes   int    `json:"ttlMinutes"`
 	Writable     bool   `json:"writable"`
 	Proxy        string `json:"proxy"`   // "none", "system" or a proxy URL
-	Backend      string `json:"backend"` // "api" (default) or "webdav"
+	Backend      string `json:"backend"` // "api" (default), "webdav" or "s3"
 }
 
 // StatusView is what the UI polls once a second.
