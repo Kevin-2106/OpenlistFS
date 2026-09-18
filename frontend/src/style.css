@@ -4,6 +4,17 @@
   font-size: 14px;
   color: #e2e6ee;
   background: #181a20;
+
+  /* Self-drawn chrome: every border, chevron, check and focus ring below
+     is painted by this stylesheet — native control skins are switched
+     off. Corners stay close to square (2–4px). */
+  --radius-card: 4px;
+  --radius-field: 3px;
+  --border: #343b4d;
+  --border-hover: #454f68;
+  --border-card: #2e3342;
+  --border-focus: #4f7cd6;
+  --focus-ring: 0 0 0 2px rgba(79, 124, 214, 0.28);
 }
 
 * { box-sizing: border-box; }
@@ -18,12 +29,12 @@ body {
 
 h1 { font-size: 20px; margin: 4px 0 2px; font-weight: 600; letter-spacing: 0.2px; }
 h2 { font-size: 13px; margin: 0 0 10px; color: #8fa0c2; text-transform: uppercase; letter-spacing: 1.2px; }
-.sub { color: #7c8698; font-size: 12px; margin: 0 0 18px; }
+.sub { color: #7c8698; font-size: 12px; margin: 0 0 18px; line-height: 1.5; }
 
 .card {
   background: #22252e;
-  border: 1px solid #2e3342;
-  border-radius: 10px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-card);
   padding: 16px 18px;
   margin-bottom: 16px;
 }
@@ -31,52 +42,98 @@ h2 { font-size: 13px; margin: 0 0 10px; color: #8fa0c2; text-transform: uppercas
 .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; }
 .field label { font-size: 11px; color: #93a0b8; }
+
+/* Text inputs: native skin off, border and focus ring painted here. */
 .field input[type='text'],
 .field input[type='password'],
 .field input[type='number'] {
+  appearance: none;
   background: #181a20;
-  border: 1px solid #343b4d;
+  border: 1px solid var(--border);
   color: #e2e6ee;
-  border-radius: 6px;
+  border-radius: var(--radius-field);
   padding: 7px 10px;
   font-size: 13px;
+  font-family: inherit;
   outline: none;
+  transition: border-color 0.1s ease;
 }
-.field input:focus { border-color: #4f7cd6; }
-.field select {
-  background: #181a20;
-  border: 1px solid #343b4d;
-  color: #e2e6ee;
-  border-radius: 6px;
-  padding: 7px 10px;
-  font-size: 13px;
-  outline: none;
-}
+.field input:hover:not(:disabled) { border-color: var(--border-hover); }
+.field input:focus { border-color: var(--border-focus); box-shadow: var(--focus-ring); }
+.field input:disabled { opacity: 0.5; }
 
-.check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #b7c1d4; margin-top: 16px; }
+/* Selects: the dropdown arrow is drawn as an inline SVG background. */
+.field select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: #181a20 url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2393a0b8' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center;
+  border: 1px solid var(--border);
+  color: #e2e6ee;
+  border-radius: var(--radius-field);
+  padding: 7px 28px 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.1s ease;
+}
+.field select:hover:not(:disabled) { border-color: var(--border-hover); }
+.field select:focus { border-color: var(--border-focus); box-shadow: var(--focus-ring); }
+.field select:disabled { opacity: 0.5; cursor: default; }
+
+/* Checkboxes: the box and the check are both hand-drawn. */
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #b7c1d4; margin-top: 16px; }
+.check input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  background: #181a20;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.1s ease, background 0.1s ease;
+  flex: none;
+  position: relative;
+}
+.check input[type='checkbox']:hover:not(:disabled) { border-color: var(--border-hover); }
+.check input[type='checkbox']:focus-visible { box-shadow: var(--focus-ring); }
+.check input[type='checkbox']:disabled { opacity: 0.5; cursor: default; }
+.check input[type='checkbox']:checked {
+  background: #35509e url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Cpath d='M3.5 7.5l3 3 5-6' fill='none' stroke='%23ffffff' stroke-width='1.8'/%3E%3C/svg%3E") center / contain no-repeat;
+  border-color: #3d55a8;
+}
+.check label { cursor: pointer; }
 
 button {
   border: 1px solid #3d55a8;
   background: #35509e;
   color: #fff;
-  border-radius: 7px;
+  border-radius: var(--radius-field);
   padding: 8px 22px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
+  outline: none;
+  transition: background 0.1s ease, border-color 0.1s ease;
 }
 button:hover { background: #4061bd; }
+button:focus-visible { box-shadow: var(--focus-ring); }
 button:disabled { opacity: 0.45; cursor: default; }
 button.secondary { background: #2b303d; border-color: #3a4152; }
-button.secondary:hover { background: #343b4b; }
+button.secondary:hover:not(:disabled) { background: #343b4b; border-color: #475064; }
 button.danger { background: #7e3038; border-color: #a03e48; }
-button.danger:hover { background: #963a44; }
+button.danger:hover:not(:disabled) { background: #963a44; }
 
 .badge {
   display: inline-block;
-  padding: 3px 12px;
-  border-radius: 20px;
+  padding: 3px 10px;
+  border-radius: 2px;
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.3px;
 }
 .badge.on { background: #1d3a28; color: #5fd48a; border: 1px solid #2c5a3d; }
 .badge.off { background: #3a2e1d; color: #e0b45f; border: 1px solid #5a492c; }
@@ -85,7 +142,7 @@ button.danger:hover { background: #963a44; }
   background: #3a2226;
   border: 1px solid #6e343c;
   color: #f2a4ab;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   padding: 9px 13px;
   margin-bottom: 12px;
   font-size: 13px;
@@ -93,7 +150,7 @@ button.danger:hover { background: #963a44; }
 }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
-.stat { background: #1b1e26; border: 1px solid #2c3140; border-radius: 8px; padding: 10px 12px; }
+.stat { background: #1b1e26; border: 1px solid #2c3140; border-radius: var(--radius-field); padding: 10px 12px; }
 .stat .k { font-size: 11px; color: #8b96ab; }
 .stat .v { font-size: 17px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
 
