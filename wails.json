@@ -2,6 +2,12 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "openlistfs",
   "outputfilename": "openlistfs-gui",
+  "info": {
+    "productName": "OpenListFS",
+    "productVersion": "0.2.0",
+    "copyright": "OpenListFS contributors",
+    "comments": "OpenList, WebDAV and S3 desktop filesystem client"
+  },
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",

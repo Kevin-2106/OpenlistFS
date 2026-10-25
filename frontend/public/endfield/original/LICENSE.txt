@@ -1,0 +1,10 @@
+ReEndfield original SVG assets
+
+To the extent possible under law, the contributors waive all copyright and
+related or neighboring rights to the original SVG artwork in this directory
+under CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+
+These are independently authored geometric icons, patterns, and diagrams.
+They are not official game assets or official trademarks. This dedication
+does not apply to assets elsewhere in this repository, fonts, source evidence,
+or artwork downloaded from third parties. No endorsement is implied.

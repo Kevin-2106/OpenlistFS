@@ -27,6 +27,17 @@ back to `HTTP(S)_PROXY` env vars) or a specific URL
 (`http://127.0.0.1:7897`, `socks5://host:port`; a bare `host:port` means
 http). The setting is fixed per mount.
 
+**IP family** (`mount --ip-family auto|ipv4|ipv6` / GUI advanced options /
+`OPENLISTFS_IP_FAMILY`): choose automatically or force the local TCP connection
+to use only IPv4 or IPv6, without cross-family fallback. Applies to mount API,
+metadata and file traffic for every backend. With a proxy, this controls the
+connection to the proxy; its upstream connection follows the proxy's policy.
+The choice is saved per profile and included in configuration codes.
+
+The GUI provides Endfield-inspired paper/ink surfaces, yellow selection,
+light/dark/system appearance, keyboard controls and a mobile connection index.
+See [this iteration's design, tray diagnosis and acceptance evidence](docs/endfield-iteration.md).
+
 **WebDAV backend** (`--webdav` / GUI dropdown, experimental): instead of
 the OpenList native API the mount can speak plain WebDAV — PROPFIND for
 metadata, authenticated GET + HTTP Range for content, MKCOL / DELETE /
@@ -66,8 +77,9 @@ product. See [docs/research.md](docs/research.md) for measured numbers.
 ## Prerequisites
 
 - Windows 11 x64
-- [WinFsp](https://winfsp.dev/) installed (needed for `mount`; not needed for
-  `probe`/`ls`/`stat`/`readtest`)
+- [WinFsp](https://winfsp.dev/) 2.0+ (the Windows setup bundles the official
+  2.1 MSI and reuses compatible installations; needed for `mount`, not needed
+  for `probe`/`ls`/`stat`/`readtest`)
 - Go 1.25+ (only to build from source)
 
 ## Configuration
@@ -98,6 +110,30 @@ statistics (requests, TTFB, cache hit ratio, prefetch waste) polled from
 each running mount.
 
 Features beyond the CLI:
+- **Compact window**: 38px custom title bar with drag, double-click maximise,
+  minimise, restore and close-to-tray controls; matching app/tray/setup icons.
+- **Single instance**: one GUI per Windows login session across executable
+  paths and releases. Launching it again raises/restores the existing window.
+  The startup lock also excludes simultaneous launches before the UI is ready.
+- **Safe connection deletion**: synchronously unmounts every drive belonging
+  to that connection before removing it. Other connections remain mounted;
+  pending mounts block deletion, and a failed config save retains the profile.
+- **Desktop workspace**: sidebar connection management, a focused connection
+  editor, separate activity/settings views, and on-demand configuration-code
+  dialogs. Unsaved edits block mounting and are confirmed before switching.
+- **Appearance**: light, dark, or system theme in Application settings; the
+  choice is remembered locally and also updates the native window theme.
+- **WinFsp detection and repair**: checks the installed DLL/version before
+  mounting. The setup includes the official installer; the GUI can install
+  or repair it with Windows administrator confirmation after all drives are
+  unmounted. See [Windows installer](docs/windows-installer.md) and
+  [third-party notices](THIRD_PARTY_NOTICES.md).
+- **Configuration codes**: export a saved profile, copy its code, then paste
+  it into “导入为新配置” on another installation. Includes credentials,
+  backend, proxy and mount settings; duplicate names receive a number.
+  Import selects the new profile without mounting or changing startup flags.
+  Codes use Base64, **not encryption**, and must be treated like passwords.
+  See [configuration-code format](docs/configuration-codes.md).
 - **Multiple simultaneous mounts**: one session per drive letter — change
   the letter (and/or the active profile) and press Mount again to add
   another drive; each keeps its own cache and statistics card with its

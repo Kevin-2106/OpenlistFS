@@ -19,6 +19,7 @@ import (
 	"github.com/winfsp/go-winfsp/gofs"
 
 	"openlistfs/internal/filesystem"
+	"openlistfs/internal/netpolicy"
 	"openlistfs/internal/openlist"
 	"openlistfs/internal/proxy"
 	"openlistfs/internal/rangeio"
@@ -26,6 +27,7 @@ import (
 	"openlistfs/internal/s3"
 	"openlistfs/internal/vpath"
 	"openlistfs/internal/webdav"
+	"openlistfs/internal/winfspcheck"
 )
 
 // Config is everything needed to bring up one mount.
@@ -43,6 +45,7 @@ type Config struct {
 	MetaTTL     time.Duration
 	Writable    bool   // enable write support (mutations + overlay uploads)
 	Proxy       string // "none" (default), "system", or a proxy URL — see internal/proxy
+	IPFamily    string // auto (default), ipv4 or ipv6
 	Backend     string // "api" (default, OpenList native), "webdav" or "s3"
 }
 
@@ -84,8 +87,15 @@ func buildClient(ctx context.Context, cfg Config, transport http.RoundTripper) (
 // Start mounts cfg.Mountpoint. The returned Session keeps serving until
 // Unmount; ctx cancels all remote activity when the owner shuts down.
 func Start(ctx context.Context, cfg Config) (*Session, error) {
+	return start(ctx, cfg, winfspcheck.Require)
+}
+
+func start(ctx context.Context, cfg Config, requireWinFsp func() error) (*Session, error) {
 	if cfg.Mountpoint == "" {
 		return nil, fmt.Errorf("mounter: empty mountpoint")
+	}
+	if err := requireWinFsp(); err != nil {
+		return nil, fmt.Errorf("mounter: %w", err)
 	}
 	if cfg.Window > 0 && cfg.ChunkSize <= 0 {
 		cfg.ChunkSize = 512 << 10
@@ -100,6 +110,9 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		cfg.MetaTTL = 2 * time.Minute
 	}
 
+	if err := netpolicy.Validate(cfg.IPFamily); err != nil {
+		return nil, fmt.Errorf("mounter: %w", err)
+	}
 	mctx, cancel := context.WithCancel(ctx)
 	proxyFn, proxyDesc, err := proxy.Parse(cfg.Proxy)
 	if err != nil {
@@ -109,14 +122,14 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	metrics := &rangeio.Metrics{}
 	// One proxy function, two tuned transports: metadata calls and content
 	// downloads each keep their own connection pool but share the route.
-	rangeTransport := rangeio.NewTransport(proxyFn)
+	rangeTransport := netpolicy.Apply(rangeio.NewTransport(proxyFn), cfg.IPFamily)
 
 	var src filesystem.Source
 	var backend string
 	switch cfg.Backend {
 	case "", "api":
 		backend = "api"
-		c, err := buildClient(mctx, cfg, openlist.NewTransport(proxyFn))
+		c, err := buildClient(mctx, cfg, netpolicy.Apply(openlist.NewTransport(proxyFn), cfg.IPFamily))
 		if err != nil {
 			cancel()
 			return nil, err
@@ -126,7 +139,7 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	case "webdav":
 		backend = "webdav"
 		wc := webdav.New(davBaseURL(cfg.URL), cfg.Username, cfg.Password,
-			webdav.WithTransport(webdav.NewTransport(proxyFn)))
+			webdav.WithTransport(netpolicy.Apply(webdav.NewTransport(proxyFn), cfg.IPFamily)))
 		src = wc.Source(webdav.WithSourceMetrics(metrics), webdav.WithMetadataTTL(cfg.MetaTTL),
 			webdav.WithSourceTransport(rangeTransport))
 	case "s3":
@@ -137,7 +150,7 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 			return nil, fmt.Errorf("mounter: %w", err)
 		}
 		sc := s3.New(endpoint, bucket, region, cfg.Username, cfg.Password,
-			s3.WithTransport(s3.NewTransport(proxyFn)))
+			s3.WithTransport(netpolicy.Apply(s3.NewTransport(proxyFn), cfg.IPFamily)))
 		src = sc.Source(s3.WithSourceMetrics(metrics), s3.WithMetadataTTL(cfg.MetaTTL),
 			s3.WithSourceTransport(rangeTransport))
 	default:
@@ -256,7 +269,7 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	mounted, err := winfsp.Mount(behaviour, cfg.Mountpoint, opts...)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("mounter: mount %s: %w (is WinFsp installed and the drive letter free?)", cfg.Mountpoint, err)
+		return nil, fmt.Errorf("mounter: mount %s: %w (check that the drive letter is free; if the WinFsp driver cannot start, repair WinFsp with the OpenListFS installer and restart OpenListFS)", cfg.Mountpoint, err)
 	}
 
 	slog.Info("mounter: mounted", "drive", cfg.Mountpoint, "server", cfg.URL,

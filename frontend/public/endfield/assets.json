@@ -1,0 +1,102 @@
+{
+  "reference": "ReEndfield local library, 2026-10-12",
+  "production": "OFL fonts and CC0 original SVG only; no research artwork, website JS or reference fonts",
+  "assets": [
+    {
+      "path": "frontend/public/endfield/fonts/notosanssc/METADATA.pb",
+      "source": "ReEndfield/assets/fonts/open/notosanssc/METADATA.pb",
+      "sha256": "c6c4bdb785793b2de1da177caeeffcd0c90d7680bdab2de8f88ab45007bc59bc",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/notosanssc/NotoSansSC[wght].ttf",
+      "source": "ReEndfield/assets/fonts/open/notosanssc/NotoSansSC[wght].ttf",
+      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/notosanssc/OFL.txt",
+      "source": "ReEndfield/assets/fonts/open/notosanssc/OFL.txt",
+      "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/spacegrotesk/METADATA.pb",
+      "source": "ReEndfield/assets/fonts/open/spacegrotesk/METADATA.pb",
+      "sha256": "3713adf5c1a21affdbede103b6bb23f551d4195771fa8bc1b91ce813bd1623ee",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/spacegrotesk/OFL.txt",
+      "source": "ReEndfield/assets/fonts/open/spacegrotesk/OFL.txt",
+      "sha256": "564ce565c371c5e5bbf286006565a7c9aa55a9f56e7ca58d56e05d649dd61a72",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/spacegrotesk/SpaceGrotesk[wght].ttf",
+      "source": "ReEndfield/assets/fonts/open/spacegrotesk/SpaceGrotesk[wght].ttf",
+      "sha256": "acad6de1fc93436f5c0f1f4137751ef04f1aea3063e7036535970ffcfbd79f72",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/michroma/METADATA.pb",
+      "source": "ReEndfield/assets/fonts/open/michroma/METADATA.pb",
+      "sha256": "be476631b50b6b77bc57c038642b8e8abe7b5b1dcb57b2e6cc4aeb20dd5b31f2",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/michroma/Michroma-Regular.ttf",
+      "source": "ReEndfield/assets/fonts/open/michroma/Michroma-Regular.ttf",
+      "sha256": "b62301163788bc5b7f8fcac0b74b184e34e1827e577b499ecb724da065098f87",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/michroma/OFL.txt",
+      "source": "ReEndfield/assets/fonts/open/michroma/OFL.txt",
+      "sha256": "33c39ce59a45bfb0dae3280e98bdb46be59d6d68efc62d4dc5fae90a26d2f393",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/ibmplexmono/IBMPlexMono-Regular.ttf",
+      "source": "ReEndfield/assets/fonts/open/ibmplexmono/IBMPlexMono-Regular.ttf",
+      "sha256": "6a3412f058c7d8dfd9170c41e85ade48e5156ecb89356110ca57a0a27734af46",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/ibmplexmono/METADATA.pb",
+      "source": "ReEndfield/assets/fonts/open/ibmplexmono/METADATA.pb",
+      "sha256": "006b605a8a45174a3f8ad9456006233ff8f13cf3cae7fe7602904334dc323c7c",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/fonts/ibmplexmono/OFL.txt",
+      "source": "ReEndfield/assets/fonts/open/ibmplexmono/OFL.txt",
+      "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da",
+      "license": "OFL-1.1"
+    },
+    {
+      "path": "frontend/public/endfield/original/topographic.svg",
+      "source": "ReEndfield/assets/original/topographic.svg",
+      "sha256": "53f938bd87fb51fb6ddc90b7ff06ff073c9b82667db8f0d96435f040ed48860c",
+      "license": "CC0-1.0"
+    },
+    {
+      "path": "frontend/public/endfield/original/registration-grid.svg",
+      "source": "ReEndfield/assets/original/registration-grid.svg",
+      "sha256": "32eb9a84f42f08543c5a6c11fac574545527a4c3436593bc92e932c8b8c9f783",
+      "license": "CC0-1.0"
+    },
+    {
+      "path": "frontend/public/endfield/original/LICENSE.txt",
+      "source": "ReEndfield/assets/original/LICENSE.txt",
+      "sha256": "ebadc69891e31d0150646332e641bca3cd158d46c8d007c99d2e06273b7ff5de",
+      "license": "CC0-1.0"
+    },
+    {
+      "path": "frontend/public/endfield/ReEndfield-LICENSE.md",
+      "source": "ReEndfield/LICENSE.md",
+      "sha256": "b26dd04155083fd201de11dadc4e70247b13bc1bfc03ae0907a37fa93389e3a5",
+      "license": "MIT original implementation only"
+    }
+  ]
+}

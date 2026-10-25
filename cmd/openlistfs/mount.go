@@ -18,13 +18,9 @@ import (
 func cmdMount(ctx context.Context, args []string) error {
 	// Allow both "mount O: --flags" and "mount --flags O:".
 	drive := ""
-	var rest []string
-	for _, a := range args {
-		if drive == "" && !strings.HasPrefix(a, "-") {
-			drive = a
-			continue
-		}
-		rest = append(rest, a)
+	rest := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		drive, rest = args[0], args[1:]
 	}
 	fs := flag.NewFlagSet("mount", flag.ExitOnError)
 	debug := fs.Bool("debug", false, "verbose per-request trace")
@@ -37,12 +33,21 @@ func cmdMount(ctx context.Context, args []string) error {
 	webdavMode := fs.Bool("webdav", false, "speak WebDAV instead of the OpenList native API (server URL gets /dav appended when it has no path; uses username/password)")
 	s3Mode := fs.Bool("s3", false, "mount one S3 bucket instead of the OpenList native API (server URL = https://endpoint/bucket; username/password = access key/secret; region defaults to us-east-1, override with ?region=)")
 	proxySetting := fs.String("proxy", "", "proxy for all server traffic: \"none\", \"system\", or a URL like http://127.0.0.1:7897 / socks5://host:port (empty = OPENLISTFS_PROXY, then none)")
+	ipFamily := fs.String("ip-family", "", "local TCP family: auto, ipv4 or ipv6 (empty = OPENLISTFS_IP_FAMILY)")
 	metaTTL := fs.Duration("metadata-ttl", 2*time.Minute, "how long directory listings and file metadata are cached")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
+	if drive == "" && fs.NArg() > 0 {
+		drive = fs.Arg(0)
+	} else if drive != "" && fs.NArg() > 0 {
+		return fmt.Errorf("unexpected mount arguments: %v", fs.Args())
+	}
+	if fs.NArg() > 1 {
+		return fmt.Errorf("mount expects one drive letter")
+	}
 	if drive == "" {
-		return fmt.Errorf("usage: openlistfs mount <drive> [--read-ahead N] [--chunk-size N] [--cache-size N] [--prefetch-concurrency N] [--network-mode=false] [--writable] [--webdav] [--s3] [--proxy none|system|URL] [--debug]\n   e.g. openlistfs mount O:")
+		return fmt.Errorf("usage: openlistfs mount <drive> [--read-ahead N] [--chunk-size N] [--cache-size N] [--prefetch-concurrency N] [--network-mode=false] [--writable] [--webdav] [--s3] [--proxy none|system|URL] [--ip-family auto|ipv4|ipv6] [--debug]\n   e.g. openlistfs mount O:")
 	}
 	mountpoint := drive
 
@@ -72,6 +77,9 @@ func cmdMount(ctx context.Context, args []string) error {
 	if *proxySetting != "" {
 		cfg.Proxy = *proxySetting
 	}
+	if *ipFamily != "" {
+		cfg.IPFamily = *ipFamily
+	}
 	backend := ""
 	if *webdavMode {
 		backend = "webdav"
@@ -94,6 +102,7 @@ func cmdMount(ctx context.Context, args []string) error {
 		Writable:    *writable,
 		Proxy:       cfg.Proxy,
 		Backend:     backend,
+		IPFamily:    cfg.IPFamily,
 	})
 	if err != nil {
 		return err

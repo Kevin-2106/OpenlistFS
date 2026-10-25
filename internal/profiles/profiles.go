@@ -12,10 +12,11 @@ import (
 
 // Profile is one named server configuration.
 type Profile struct {
-	URL      string `json:"url"`
-	Token    string `json:"token"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	URL      string   `json:"url"`
+	Token    string   `json:"token"`
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	Options  *Options `json:"options,omitempty"`
 }
 
 // Store is the on-disk document.
@@ -25,7 +26,7 @@ type Store struct {
 	Profiles  map[string]Profile `json:"profiles"`
 }
 
-// Options are the last-used mount options (not per profile).
+// Options are mount settings, saved globally and optionally with a profile.
 type Options struct {
 	Drive        string `json:"drive"`
 	Network      bool   `json:"network"`
@@ -34,8 +35,10 @@ type Options struct {
 	CacheMiB     int    `json:"cacheMiB"`
 	Workers      int    `json:"workers"`
 	TTLMinutes   int    `json:"ttlMinutes"`
-	Proxy        string `json:"proxy"`   // "none", "system" or a proxy URL
+	Proxy        string `json:"proxy"` // "none", "system" or a proxy URL
+	IPFamily     string `json:"ipFamily,omitempty"`
 	Backend      string `json:"backend"` // "api" (default), "webdav" or "s3"
+	Writable     bool   `json:"writable"`
 }
 
 // Document wraps the store with its mount options.
@@ -58,6 +61,7 @@ func Load() (Document, error) {
 	var d Document
 	raw, err := os.ReadFile(path())
 	if errors.Is(err, os.ErrNotExist) {
+		d.Profiles = make(map[string]Profile)
 		return d, nil
 	}
 	if err != nil {
@@ -81,7 +85,29 @@ func Save(d Document) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path(), raw, 0600)
+	return writeDocument(path(), raw)
+}
+
+// writeDocument replaces the configuration only after a complete staged write.
+func writeDocument(destination string, raw []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".profiles-*.json")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, destination)
 }
 
 // ActiveProfile returns the active profile ("" if none or missing).
